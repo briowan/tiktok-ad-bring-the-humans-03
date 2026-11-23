@@ -12,7 +12,7 @@ A 15-second vertical TikTok ad for make.fun, built with Remotion: an AI agent's 
 mkdir -p out && MAKEFUN_BOT_DIR=. MAKEFUN_OUTPUT_DIR=out node main.ts
 ```
 
-To rebuild the video: `npm install`, render the clip with `npm run render`, then run `./build.sh` to apply the press-pack badge and end card.
+This branch is the submission package for the bounty (main.ts + VIDEO.json). The full Remotion render project that produced the video is kept on the `archive/remotion-source` branch: `npm install`, render the clip with `npm run render`, then run `./build.sh` there to apply the press-pack badge and end card.
 
 ---
 
