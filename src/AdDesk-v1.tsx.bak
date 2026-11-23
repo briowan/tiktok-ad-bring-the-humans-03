@@ -1,0 +1,2217 @@
+import {
+  AbsoluteFill,
+  Easing,
+  Img,
+  Sequence,
+  interpolate,
+  spring,
+  staticFile,
+  useCurrentFrame,
+  useVideoConfig,
+} from "remotion";
+
+// ============================================================================
+// SINGLE SOURCE OF TRUTH — LOCKED VERBATIM COPY (NO OTHER ON-SCREEN TEXT)
+// ============================================================================
+const COPY = {
+  kicker: "make.fun contest",
+  token: "AI AGENT",
+  hook: "How good is your AI agent?",
+  hookAccent: "AI agent",
+  modules: {
+    solver: "SOLVER",
+    csv: "CSV",
+    vm: "TINY VM",
+  },
+  stakes: "$500 PRIZE POOL",
+  punchline: "Enter your AI agent on make.fun.",
+} as const;
+
+// ============================================================================
+// DESIGN SYSTEM & TIMING CONSTANTS (1080x1920 @ 30fps, 450 frames: 0..449)
+// Safe zone: x120..960, y269..1248 | Badge exclusion: x96..474, y248..424
+// ============================================================================
+const THEME = {
+  colors: {
+    bgTop: "#FFFFFF",
+    bgBase: "#FAF8FC",
+    bgBottom: "#F1ECF6",
+    surface: "#FFFFFF",
+    surfaceSoft: "#F5F1F9",
+    deskTop: "#F7F4FA",
+    deskSide: "#E6DFEE",
+    deskRecess: "#EBE5F2",
+    deskStroke: "#CFC5DB",
+    ink: "#191419",
+    inkMuted: "#6F6478",
+    magenta: "#c41c83",
+    magentaSoft: "#FBEAF4",
+    cyan: "#22d3ee",
+    cyanSoft: "#E6FAFD",
+    lineHair: "#E3DCEB",
+  },
+  font: 'Arial, "Helvetica Neue", Helvetica, sans-serif',
+  ease: {
+    outCubic: Easing.out(Easing.cubic),
+    inCubic: Easing.in(Easing.cubic),
+    inOutCubic: Easing.inOut(Easing.cubic),
+    popUp: Easing.bezier(0.22, 1, 0.36, 1),
+    snapOut: Easing.out(Easing.back(1.18)),
+  },
+  spring: {
+    snappy: { damping: 16, stiffness: 240, mass: 0.85 },
+    smooth: { damping: 20, stiffness: 170, mass: 0.9 },
+    detent: { damping: 14, stiffness: 280, mass: 0.75 },
+  },
+} as const;
+
+const MASCOT_ASSETS = {
+  happy: staticFile("mascot-tilt-happy.svg"),
+  play: staticFile("mascot-tilt-play.svg"),
+  full: staticFile("mascot-full-play.svg"),
+} as const;
+
+const BEATS = {
+  hookStart: 0,
+  hookDuration: 60, // f0..59
+  metaStart: 60, // f60..134
+  arenaStart: 135, // f135..239
+  stakesStart: 240,
+  stakesDuration: 75, // f240..314
+  punchStart: 315,
+  punchDuration: 60, // f315..374 (still f330..374)
+  calmStart: 375,
+  calmDuration: 75, // f375..449
+} as const;
+
+const clampInterp = (
+  value: number,
+  inputRange: readonly [number, number],
+  outputRange: readonly [number, number],
+  easing?: (t: number) => number,
+): number =>
+  interpolate(value, [inputRange[0], inputRange[1]], [outputRange[0], outputRange[1]], {
+    easing,
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+  });
+
+const clamp01 = (v: number): number => (v < 0 ? 0 : v > 1 ? 1 : v);
+
+// ============================================================================
+// BACKGROUND STUDIO LAYER (CLEAN LIGHT PLATE + SUBTLE DETERMINISTIC TEXTURE)
+// ============================================================================
+const StudioBackdrop = ({
+  frame,
+  isCalmPlate,
+}: {
+  frame: number;
+  isCalmPlate: boolean;
+}) => {
+  // Subtle mesh drift only during active motion; frozen completely on punchline hold & calm plate
+  const activeMotionFrame =
+    frame >= 329 ? 329 : frame;
+  const driftX = isCalmPlate ? 0 : Math.sin(activeMotionFrame / 58) * 28;
+  const driftY = isCalmPlate ? 0 : Math.cos(activeMotionFrame / 64) * 22;
+
+  const simplifyFade = isCalmPlate
+    ? 0
+    : clampInterp(frame, [315, 326], [1, 0], THEME.ease.outCubic);
+
+  const grainOffsetX = isCalmPlate || frame >= 329 ? 0 : (frame * 7) % 220;
+  const grainOffsetY = isCalmPlate || frame >= 329 ? 0 : (frame * 13) % 220;
+  const grainDataUri =
+    "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2'/%3E%3C/filter%3E%3Crect width='220' height='220' filter='url(%23n)' opacity='0.45'/%3E%3C/svg%3E\")";
+
+  return (
+    <AbsoluteFill
+      style={{
+        background: `linear-gradient(180deg, ${THEME.colors.bgTop} 0%, ${THEME.colors.bgBase} 52%, ${THEME.colors.bgBottom} 100%)`,
+        overflow: "hidden",
+      }}
+    >
+      {/* Subtle architectural brand aura orbs */}
+      <div
+        style={{
+          position: "absolute",
+          width: 860,
+          height: 860,
+          borderRadius: "50%",
+          top: -220 + driftY,
+          right: -240 + driftX,
+          background: `radial-gradient(circle, rgba(196,28,131,${isCalmPlate ? 0.045 : 0.075}) 0%, rgba(196,28,131,0) 68%)`,
+        }}
+      />
+      <div
+        style={{
+          position: "absolute",
+          width: 780,
+          height: 780,
+          borderRadius: "50%",
+          bottom: 180 - driftY,
+          left: -260 - driftX,
+          background: `radial-gradient(circle, rgba(34,211,238,${isCalmPlate ? 0.04 : 0.085}) 0%, rgba(34,211,238,0) 68%)`,
+        }}
+      />
+
+      {/* Quiet Jiwa+/jup architectural background sweep */}
+      <svg
+        width={1080}
+        height={1920}
+        viewBox="0 0 1080 1920"
+        style={{
+          position: "absolute",
+          inset: 0,
+          opacity: isCalmPlate ? 0.45 : 0.55,
+        }}
+      >
+        <path
+          d="M -60 1510 Q 520 1350 1140 1560"
+          fill="none"
+          stroke={THEME.colors.magenta}
+          strokeWidth={isCalmPlate ? 28 : 22}
+          strokeOpacity={isCalmPlate ? 0.045 : 0.055}
+        />
+        <path
+          d="M -80 210 Q 560 75 1160 250"
+          fill="none"
+          stroke={THEME.colors.cyan}
+          strokeWidth={18}
+          strokeOpacity={isCalmPlate ? 0.05 : 0.06}
+        />
+      </svg>
+
+      {/* Subtle studio desk drafting grid — clears before punchline & calm plate */}
+      {simplifyFade > 0.01 && (
+        <div
+          style={{
+            position: "absolute",
+            left: 100,
+            top: 432,
+            width: 880,
+            height: 828,
+            opacity: 0.34 * simplifyFade,
+            backgroundImage: `linear-gradient(to right, ${THEME.colors.lineHair} 1px, transparent 1px), linear-gradient(to bottom, ${THEME.colors.lineHair} 1px, transparent 1px)`,
+            backgroundSize: "44px 44px",
+            maskImage:
+              "radial-gradient(ellipse 68% 62% at 50% 54%, black 35%, transparent 100%)",
+            WebkitMaskImage:
+              "radial-gradient(ellipse 68% 62% at 50% 54%, black 35%, transparent 100%)",
+          }}
+        />
+      )}
+
+      {/* Subtle tactile paper grain */}
+      <AbsoluteFill
+        style={{
+          backgroundImage: grainDataUri,
+          backgroundSize: "220px 220px",
+          backgroundPosition: `${grainOffsetX}px ${grainOffsetY}px`,
+          opacity: isCalmPlate ? 0.018 : 0.028,
+          mixBlendMode: "multiply",
+          pointerEvents: "none",
+        }}
+      />
+
+      {/* Soft clean studio edge framing */}
+      <AbsoluteFill
+        style={{
+          background:
+            "radial-gradient(ellipse 84% 76% at 50% 44%, transparent 64%, rgba(25,20,25,0.055) 100%)",
+          pointerEvents: "none",
+        }}
+      />
+    </AbsoluteFill>
+  );
+};
+
+// ============================================================================
+// PERSISTENT SMALL LABEL — "make.fun contest"
+// Positioned top-right inside safe zone (x660..948, y306..362),
+// 186px clear of ffmpeg badge box (x96..474, y248..424).
+// Sharp from frame 0; unmounted at f375 so TENANG has zero text.
+// ============================================================================
+const KickerLabel = () => {
+  return (
+    <div
+      style={{
+        position: "absolute",
+        right: 132,
+        top: 308,
+        height: 54,
+        paddingLeft: 20,
+        paddingRight: 22,
+        borderRadius: 999,
+        backgroundColor: THEME.colors.surface,
+        border: `2px solid ${THEME.colors.lineHair}`,
+        boxShadow: "0 8px 20px rgba(25,20,25,0.06)",
+        display: "flex",
+        alignItems: "center",
+        gap: 10,
+      }}
+    >
+      <div
+        style={{
+          width: 10,
+          height: 10,
+          borderRadius: 3,
+          backgroundColor: THEME.colors.magenta,
+          transform: "rotate(45deg)",
+          flexShrink: 0,
+        }}
+      />
+      <span
+        style={{
+          fontFamily: THEME.font,
+          fontSize: 25,
+          fontWeight: 700,
+          letterSpacing: "0.01em",
+          color: THEME.colors.ink,
+          lineHeight: 1,
+          whiteSpace: "nowrap",
+        }}
+      >
+        {COPY.kicker}
+      </span>
+    </div>
+  );
+};
+
+// ============================================================================
+// HOOK HEADLINE (f0..59) — "How good is your AI agent?"
+// 100% sharp, opaque, crisp at frame 0. Magenta accent on "AI agent".
+// Safe zone x132..948, y458..646 (34px clear below badge box y424).
+// ============================================================================
+const HookHeadline = () => {
+  const frame = useCurrentFrame(); // local 0..59 == global 0..59
+
+  const accentIdx = COPY.hook.indexOf(COPY.hookAccent);
+  const lineOne = COPY.hook.slice(0, accentIdx).trimEnd(); // "How good is your"
+  const accentText = COPY.hook.slice(accentIdx, accentIdx + COPY.hookAccent.length); // "AI agent"
+  const trailingPunct = COPY.hook.slice(accentIdx + COPY.hookAccent.length); // "?"
+
+  // Kinetic accent sweep after frame 0 without ever blurring or dimming frame 0
+  const underlineProgress = clampInterp(frame, [3, 19], [0, 1], THEME.ease.outCubic);
+  const haloOpacity = clampInterp(frame, [0, 14], [0.14, 0.24], THEME.ease.outCubic);
+
+  // Fast crisp exit (10 frames: f50..59) right as desk unfolds
+  const exitT = clampInterp(frame, [50, 59], [0, 1], THEME.ease.inCubic);
+  const exitY = exitT * -36;
+  const exitScale = 1 - exitT * 0.03;
+  const opacity = 1 - exitT;
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: 132,
+        top: 458,
+        width: 816,
+        opacity,
+        transform: `translateY(${exitY}px) scale(${exitScale})`,
+        transformOrigin: "50% 40%",
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        textAlign: "center",
+      }}
+    >
+      {/* Line 1 */}
+      <div
+        style={{
+          fontFamily: THEME.font,
+          fontSize: 78,
+          fontWeight: 800,
+          lineHeight: 1.08,
+          letterSpacing: "-0.03em",
+          color: THEME.colors.ink,
+        }}
+      >
+        {lineOne}
+      </div>
+
+      {/* Line 2 with highlighted "AI agent" */}
+      <div
+        style={{
+          position: "relative",
+          display: "inline-flex",
+          alignItems: "baseline",
+          marginTop: 6,
+          fontFamily: THEME.font,
+          fontSize: 82,
+          fontWeight: 900,
+          lineHeight: 1.06,
+          letterSpacing: "-0.03em",
+        }}
+      >
+        {/* Subtle studio glow behind keyword (inspired by jup ref) */}
+        <div
+          style={{
+            position: "absolute",
+            left: -26,
+            right: 16,
+            top: -12,
+            bottom: -14,
+            borderRadius: 999,
+            background: `radial-gradient(ellipse at center, rgba(196,28,131,${haloOpacity}) 0%, rgba(196,28,131,0) 72%)`,
+            pointerEvents: "none",
+          }}
+        />
+        <span style={{ position: "relative", color: THEME.colors.magenta }}>
+          {accentText}
+          <span
+            style={{
+              position: "absolute",
+              left: 2,
+              right: 2,
+              bottom: -8,
+              height: 7,
+              borderRadius: 4,
+              background: `linear-gradient(90deg, ${THEME.colors.magenta} 0%, ${THEME.colors.cyan} 100%)`,
+              transform: `scaleX(${underlineProgress})`,
+              transformOrigin: "0% 50%",
+            }}
+          />
+        </span>
+        <span style={{ position: "relative", color: THEME.colors.ink }}>
+          {trailingPunct}
+        </span>
+      </div>
+    </div>
+  );
+};
+
+// ============================================================================
+// TACTILE "AI AGENT" HARDWARE CARTRIDGE TOKEN (NOT A COIN!)
+// Chamfered rectangular hardware key-tile with connector tongue, grip ribs,
+// uniform #FFFFFF relief bed for all 3 Kiro mascot SVGs (zero flash),
+// and verbatim "AI AGENT" nameplate.
+// ============================================================================
+const AgentToken = ({
+  x,
+  y,
+  scale,
+  rotateY,
+  rotateX,
+  elevation,
+  isLocked,
+  happyOpacity,
+  playOpacity,
+  fullOpacity,
+}: {
+  x: number;
+  y: number;
+  scale: number;
+  rotateY: number;
+  rotateX: number;
+  elevation: number;
+  isLocked: boolean;
+  happyOpacity: number;
+  playOpacity: number;
+  fullOpacity: number;
+}) => {
+  const tokenW = 236;
+  const tokenH = 122;
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: x - tokenW / 2,
+        top: y - tokenH / 2,
+        width: tokenW,
+        height: tokenH,
+        transform: `perspective(1200px) translateY(${-elevation}px) rotateX(${rotateX}deg) rotateY(${rotateY}deg) scale(${scale})`,
+        transformOrigin: "50% 50%",
+      }}
+    >
+      {/* Grounded contact shadow scaled with elevation */}
+      <div
+        style={{
+          position: "absolute",
+          left: 8,
+          right: 4,
+          top: 14 + elevation * 0.75,
+          bottom: -14 - elevation * 0.45,
+          borderRadius: 18,
+          backgroundColor: "rgba(25,20,25,0.16)",
+          filter: "blur(10px)",
+          transform: `scale(${1 + elevation * 0.004})`,
+        }}
+      />
+
+      {/* Right-side hardware connector tongue (mates into make.fun desk slot) */}
+      <div
+        style={{
+          position: "absolute",
+          right: -14,
+          top: 31,
+          width: 22,
+          height: 60,
+          borderRadius: "0 10px 10px 0",
+          backgroundColor: isLocked ? THEME.colors.cyan : THEME.colors.deskSide,
+          border: `3px solid ${THEME.colors.ink}`,
+          borderLeft: "none",
+          display: "flex",
+          flexDirection: "column",
+          justifyContent: "center",
+          alignItems: "center",
+          gap: 7,
+        }}
+      >
+        <div
+          style={{
+            width: 8,
+            height: 4,
+            borderRadius: 2,
+            backgroundColor: isLocked ? THEME.colors.ink : THEME.colors.inkMuted,
+          }}
+        />
+        <div
+          style={{
+            width: 8,
+            height: 4,
+            borderRadius: 2,
+            backgroundColor: isLocked ? THEME.colors.ink : THEME.colors.inkMuted,
+          }}
+        />
+        <div
+          style={{
+            width: 8,
+            height: 4,
+            borderRadius: 2,
+            backgroundColor: isLocked ? THEME.colors.ink : THEME.colors.inkMuted,
+          }}
+        />
+      </div>
+
+      {/* Extruded 3D thickness lip underneath cartridge */}
+      <div
+        style={{
+          position: "absolute",
+          inset: 0,
+          transform: "translateY(8px)",
+          borderRadius: 16,
+          backgroundColor: THEME.colors.ink,
+        }}
+      />
+
+      {/* Main tactile hardware cartridge chassis */}
+      <div
+        style={{
+          position: "relative",
+          width: "100%",
+          height: "100%",
+          borderRadius: 16,
+          backgroundColor: THEME.colors.surface,
+          border: `3px solid ${THEME.colors.ink}`,
+          boxShadow: isLocked
+            ? `0 0 0 3px rgba(34,211,238,0.28), inset 0 2px 0 rgba(255,255,255,0.95)`
+            : "inset 0 2px 0 rgba(255,255,255,0.95)",
+          display: "flex",
+          alignItems: "center",
+          paddingLeft: 12,
+          paddingRight: 14,
+          gap: 11,
+          overflow: "hidden",
+        }}
+      >
+        {/* Top brand keystripe */}
+        <div
+          style={{
+            position: "absolute",
+            left: 0,
+            right: 0,
+            top: 0,
+            height: 8,
+            background: isLocked
+              ? `linear-gradient(90deg, ${THEME.colors.magenta} 0%, ${THEME.colors.cyan} 100%)`
+              : THEME.colors.magenta,
+          }}
+        />
+
+        {/* Left tactile grip ribs (distinctly cartridge/keycap, never coin) */}
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: 6,
+            paddingTop: 6,
+            flexShrink: 0,
+          }}
+        >
+          {[0, 1, 2, 3].map((rib) => (
+            <div
+              key={rib}
+              style={{
+                width: 6,
+                height: 11,
+                borderRadius: 3,
+                backgroundColor: THEME.colors.deskSide,
+                border: `1.5px solid ${THEME.colors.deskStroke}`,
+              }}
+            />
+          ))}
+        </div>
+
+        {/* Uniform #FFFFFF Mascot Relief Bay (identical treatment for all 3 SVGs -> zero flash) */}
+        <div
+          style={{
+            position: "relative",
+            width: 68,
+            height: 68,
+            marginTop: 5,
+            borderRadius: 12,
+            backgroundColor: "#FFFFFF",
+            border: `2px solid ${THEME.colors.lineHair}`,
+            boxShadow: "inset 0 2px 6px rgba(25,20,25,0.09)",
+            flexShrink: 0,
+            overflow: "hidden",
+          }}
+        >
+          <Img
+            src={MASCOT_ASSETS.happy}
+            alt=""
+            style={{
+              position: "absolute",
+              inset: 5,
+              width: "calc(100% - 10px)",
+              height: "calc(100% - 10px)",
+              objectFit: "contain",
+              opacity: happyOpacity,
+            }}
+          />
+          <Img
+            src={MASCOT_ASSETS.play}
+            alt=""
+            style={{
+              position: "absolute",
+              inset: 5,
+              width: "calc(100% - 10px)",
+              height: "calc(100% - 10px)",
+              objectFit: "contain",
+              opacity: playOpacity,
+            }}
+          />
+          <Img
+            src={MASCOT_ASSETS.full}
+            alt=""
+            style={{
+              position: "absolute",
+              inset: 5,
+              width: "calc(100% - 10px)",
+              height: "calc(100% - 10px)",
+              objectFit: "contain",
+              opacity: fullOpacity,
+            }}
+          />
+        </div>
+
+        {/* Nameplate block — verbatim "AI AGENT" */}
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            justifyContent: "center",
+            gap: 7,
+            marginTop: 5,
+            flex: 1,
+          }}
+        >
+          <span
+            style={{
+              fontFamily: THEME.font,
+              fontSize: 22,
+              fontWeight: 900,
+              letterSpacing: "0.03em",
+              color: THEME.colors.ink,
+              lineHeight: 1.05,
+              whiteSpace: "nowrap",
+            }}
+          >
+            {COPY.token}
+          </span>
+          {/* Precision status LED bar (pure geometry, no text) */}
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <div
+              style={{
+                width: 44,
+                height: 6,
+                borderRadius: 3,
+                backgroundColor: isLocked ? THEME.colors.cyan : THEME.colors.magenta,
+              }}
+            />
+            <div
+              style={{
+                width: 12,
+                height: 6,
+                borderRadius: 3,
+                backgroundColor: isLocked ? THEME.colors.magenta : THEME.colors.deskStroke,
+              }}
+            />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ============================================================================
+// EDITORIAL GEOMETRIC HAND PUSHING THE TOKEN INTO THE SLOT (f0..82)
+// ============================================================================
+const PushingHand = ({
+  tokenLeftX,
+  tokenCenterY,
+  frame,
+}: {
+  tokenLeftX: number;
+  tokenCenterY: number;
+  frame: number;
+}) => {
+  if (frame > 84) {
+    return null;
+  }
+
+  // Natural push contact f0..64, then clean lift & smooth exit left f66..82
+  const detentCompress =
+    frame >= 48 && frame <= 62
+      ? Math.sin(clampInterp(frame, [48, 62], [0, Math.PI])) * 4
+      : 0;
+  const exitT = clampInterp(frame, [66, 82], [0, 1], THEME.ease.inCubic);
+  const exitX = exitT * -360;
+  const exitY = exitT * -26;
+  const exitOpacity = clampInterp(frame, [72, 82], [1, 0], THEME.ease.inCubic);
+
+  // Hand fingertips meet token left grip cleanly at tokenLeftX
+  const handWidth = 280;
+  const handHeight = 148;
+  const handLeft = tokenLeftX - handWidth + 24 + detentCompress + exitX;
+  const handTop = tokenCenterY - handHeight / 2 + 4 + exitY;
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: handLeft,
+        top: handTop,
+        width: handWidth,
+        height: handHeight,
+        opacity: exitOpacity,
+        pointerEvents: "none",
+      }}
+    >
+      <svg width={handWidth} height={handHeight} viewBox="0 0 280 148">
+        {/* Soft cast shadow onto desk */}
+        <ellipse
+          cx={162}
+          cy={124}
+          rx={92}
+          ry={17}
+          fill="rgba(25,20,25,0.14)"
+        />
+        {/* Sleeve cuff (editorial ink + magenta accent band) */}
+        <path
+          d="M 0 36 L 86 36 Q 98 36 98 48 L 98 106 Q 98 118 86 118 L 0 118 Z"
+          fill={THEME.colors.ink}
+        />
+        <rect x={70} y={36} width={10} height={82} fill={THEME.colors.magenta} />
+        {/* Wrist & palm */}
+        <path
+          d="M 94 42 L 184 42 Q 204 42 214 50 L 252 50 Q 266 50 266 63 Q 266 75 252 75 L 258 75 Q 270 75 270 87 Q 270 99 256 99 L 242 99 Q 252 99 252 110 Q 252 120 238 120 L 166 120 Q 140 120 124 112 L 94 112 Z"
+          fill="#F4D7C8"
+          stroke={THEME.colors.ink}
+          strokeWidth={3.5}
+          strokeLinejoin="round"
+        />
+        {/* Thumb top contour */}
+        <path
+          d="M 150 42 Q 170 22 204 28 Q 222 31 224 44 Q 225 52 212 54 L 168 54"
+          fill="#F4D7C8"
+          stroke={THEME.colors.ink}
+          strokeWidth={3.5}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+        {/* Clean finger separation strokes */}
+        <line
+          x1={206}
+          y1={75}
+          x2={252}
+          y2={75}
+          stroke={THEME.colors.ink}
+          strokeWidth={3}
+          strokeLinecap="round"
+        />
+        <line
+          x1={202}
+          y1={99}
+          x2={244}
+          y2={99}
+          stroke={THEME.colors.ink}
+          strokeWidth={3}
+          strokeLinecap="round"
+        />
+        {/* Subtle tactile knuckle crease */}
+        <path
+          d="M 184 62 Q 188 74 184 86"
+          fill="none"
+          stroke="rgba(25,20,25,0.22)"
+          strokeWidth={2.5}
+          strokeLinecap="round"
+        />
+      </svg>
+    </div>
+  );
+};
+
+// ============================================================================
+// ARENA MODULE 1: "SOLVER" — SOLVED MAZE PROOF (ZERO EXTRA TEXT)
+// ============================================================================
+const SolverModule = ({
+  frame,
+  fps,
+  left,
+  top,
+  scale,
+  rotateY,
+  opacity,
+}: {
+  frame: number;
+  fps: number;
+  left: number;
+  top: number;
+  scale: number;
+  rotateY: number;
+  opacity: number;
+}) => {
+  // Exact 550px orthogonal maze path solved across f150..169
+  const pathLen = 550;
+  const solveT = clampInterp(frame, [150, 169], [0, 1], THEME.ease.inOutCubic);
+  const solvedDone = frame >= 168;
+  const goalBurst = spring({
+    frame: Math.max(0, frame - 168),
+    fps,
+    config: THEME.spring.snappy,
+  });
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left,
+        top,
+        width: 388,
+        height: 288,
+        opacity,
+        transform: `perspective(1200px) rotateY(${rotateY}deg) scale(${scale})`,
+        transformOrigin: "50% 50%",
+        borderRadius: 22,
+        backgroundColor: THEME.colors.surface,
+        border: `3px solid ${THEME.colors.ink}`,
+        boxShadow:
+          "0 10px 22px rgba(25,20,25,0.12), 0 26px 46px rgba(25,20,25,0.08)",
+        overflow: "hidden",
+        display: "flex",
+        flexDirection: "column",
+      }}
+    >
+      {/* Header strip — verbatim "SOLVER" */}
+      <div
+        style={{
+          height: 60,
+          paddingLeft: 20,
+          paddingRight: 20,
+          borderBottom: `2px solid ${THEME.colors.lineHair}`,
+          backgroundColor: THEME.colors.surfaceSoft,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <div
+            style={{
+              width: 13,
+              height: 13,
+              borderRadius: 3,
+              backgroundColor: THEME.colors.magenta,
+              transform: "rotate(45deg)",
+            }}
+          />
+          <span
+            style={{
+              fontFamily: THEME.font,
+              fontSize: 27,
+              fontWeight: 900,
+              letterSpacing: "0.04em",
+              color: THEME.colors.ink,
+            }}
+          >
+            {COPY.modules.solver}
+          </span>
+        </div>
+        {/* Completion status pip */}
+        <div
+          style={{
+            width: 16,
+            height: 16,
+            borderRadius: "50%",
+            backgroundColor: solvedDone ? THEME.colors.cyan : THEME.colors.deskSide,
+            border: `2px solid ${THEME.colors.ink}`,
+          }}
+        />
+      </div>
+
+      {/* Maze visual body */}
+      <div
+        style={{
+          flex: 1,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          backgroundColor: THEME.colors.surface,
+        }}
+      >
+        <svg width={348} height={192} viewBox="0 0 340 184">
+          {/* Maze floor */}
+          <rect
+            x={20}
+            y={17}
+            width={300}
+            height={150}
+            rx={12}
+            fill={THEME.colors.bgBase}
+            stroke={THEME.colors.ink}
+            strokeWidth={3.5}
+          />
+          {/* Subtle cell grid dots */}
+          {[0, 1, 2, 3, 4, 5].map((c) =>
+            [0, 1, 2].map((r) => (
+              <circle
+                key={`${c}-${r}`}
+                cx={45 + c * 50}
+                cy={42 + r * 50}
+                r={2.5}
+                fill={THEME.colors.deskStroke}
+              />
+            )),
+          )}
+          {/* Solid orthogonal maze walls (mathematically clear of solver route) */}
+          <g
+            stroke={THEME.colors.ink}
+            strokeWidth={5}
+            strokeLinecap="round"
+            fill="none"
+          >
+            <line x1={70} y1={67} x2={70} y2={167} />
+            <line x1={120} y1={17} x2={120} y2={67} />
+            <line x1={120} y1={117} x2={120} y2={167} />
+            <line x1={170} y1={67} x2={170} y2={167} />
+            <line x1={220} y1={17} x2={220} y2={117} />
+            <line x1={270} y1={17} x2={270} y2={67} />
+            <line x1={270} y1={117} x2={270} y2={167} />
+            <line x1={20} y1={67} x2={70} y2={67} />
+            <line x1={70} y1={117} x2={170} y2={117} />
+            <line x1={220} y1={67} x2={270} y2={67} />
+          </g>
+
+          {/* Animated solved path */}
+          <defs>
+            <linearGradient id="solverRouteGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stopColor={THEME.colors.cyan} />
+              <stop offset="100%" stopColor={THEME.colors.magenta} />
+            </linearGradient>
+          </defs>
+          <path
+            d="M 45 42 L 95 42 L 95 92 L 145 92 L 145 42 L 195 42 L 195 142 L 245 142 L 245 92 L 295 92 L 295 142"
+            fill="none"
+            stroke="url(#solverRouteGrad)"
+            strokeWidth={10}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeDasharray={pathLen}
+            strokeDashoffset={pathLen * (1 - solveT)}
+          />
+
+          {/* Start node */}
+          <circle
+            cx={45}
+            cy={42}
+            r={10}
+            fill={THEME.colors.cyan}
+            stroke={THEME.colors.ink}
+            strokeWidth={3}
+          />
+
+          {/* Goal node + completion pulse ring */}
+          {solvedDone && (
+            <circle
+              cx={295}
+              cy={142}
+              r={10 + goalBurst * 16}
+              fill="none"
+              stroke={THEME.colors.magenta}
+              strokeWidth={3}
+              strokeOpacity={clamp01(1 - goalBurst)}
+            />
+          )}
+          <rect
+            x={284}
+            y={131}
+            width={22}
+            height={22}
+            rx={6}
+            fill={solvedDone ? THEME.colors.magenta : THEME.colors.surface}
+            stroke={THEME.colors.ink}
+            strokeWidth={3}
+          />
+          {solvedDone && (
+            <path
+              d="M 290 142 L 294 146 L 301 138"
+              fill="none"
+              stroke="#FFFFFF"
+              strokeWidth={3}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          )}
+        </svg>
+      </div>
+    </div>
+  );
+};
+
+// ============================================================================
+// ARENA MODULE 2: "CSV" — PARSED ROWS PROOF (ZERO FAKE TEXT OR NUMBERS)
+// ============================================================================
+const CSV_ROW_WIDTHS: readonly (readonly [number, number, number])[] = [
+  [84, 102, 56],
+  [66, 86, 74],
+  [92, 74, 62],
+  [74, 108, 50],
+];
+
+const CsvModule = ({
+  frame,
+  left,
+  top,
+  scale,
+  rotateY,
+  opacity,
+}: {
+  frame: number;
+  left: number;
+  top: number;
+  scale: number;
+  rotateY: number;
+  opacity: number;
+}) => {
+  // Scan beam sweeps across rows 0..3 over f168..194
+  const scanProgress = clampInterp(frame, [168, 194], [0, 1], THEME.ease.inOutCubic);
+  const scanActive = frame >= 168 && frame <= 198;
+  const allParsed = frame >= 193;
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left,
+        top,
+        width: 388,
+        height: 288,
+        opacity,
+        transform: `perspective(1200px) rotateY(${rotateY}deg) scale(${scale})`,
+        transformOrigin: "50% 50%",
+        borderRadius: 22,
+        backgroundColor: THEME.colors.surface,
+        border: `3px solid ${THEME.colors.ink}`,
+        boxShadow:
+          "0 10px 22px rgba(25,20,25,0.12), 0 26px 46px rgba(25,20,25,0.08)",
+        overflow: "hidden",
+        display: "flex",
+        flexDirection: "column",
+      }}
+    >
+      {/* Header strip — verbatim "CSV" */}
+      <div
+        style={{
+          height: 60,
+          paddingLeft: 20,
+          paddingRight: 20,
+          borderBottom: `2px solid ${THEME.colors.lineHair}`,
+          backgroundColor: THEME.colors.surfaceSoft,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <div
+            style={{
+              width: 14,
+              height: 14,
+              borderRadius: 4,
+              backgroundColor: THEME.colors.cyan,
+              border: `2px solid ${THEME.colors.ink}`,
+            }}
+          />
+          <span
+            style={{
+              fontFamily: THEME.font,
+              fontSize: 27,
+              fontWeight: 900,
+              letterSpacing: "0.04em",
+              color: THEME.colors.ink,
+            }}
+          >
+            {COPY.modules.csv}
+          </span>
+        </div>
+        <div
+          style={{
+            width: 16,
+            height: 16,
+            borderRadius: "50%",
+            backgroundColor: allParsed ? THEME.colors.cyan : THEME.colors.deskSide,
+            border: `2px solid ${THEME.colors.ink}`,
+          }}
+        />
+      </div>
+
+      {/* Structured tabular rows body (pure bars + check glyphs, zero code/text) */}
+      <div
+        style={{
+          position: "relative",
+          flex: 1,
+          padding: "18px 20px",
+          display: "flex",
+          flexDirection: "column",
+          justifyContent: "space-between",
+        }}
+      >
+        {/* Subtle vertical column dividers */}
+        <div
+          style={{
+            position: "absolute",
+            left: 126,
+            top: 16,
+            bottom: 16,
+            width: 1.5,
+            backgroundColor: THEME.colors.lineHair,
+          }}
+        />
+        <div
+          style={{
+            position: "absolute",
+            left: 248,
+            top: 16,
+            bottom: 16,
+            width: 1.5,
+            backgroundColor: THEME.colors.lineHair,
+          }}
+        />
+
+        {CSV_ROW_WIDTHS.map((widths, rowIdx) => {
+          const rowStart = 171 + rowIdx * 6;
+          const rowFill = clampInterp(frame, [rowStart, rowStart + 6], [0, 1], THEME.ease.outCubic);
+          const isParsed = rowFill > 0.5;
+          return (
+            <div
+              key={rowIdx}
+              style={{
+                position: "relative",
+                height: 40,
+                borderRadius: 10,
+                paddingLeft: 10,
+                paddingRight: 10,
+                backgroundColor: isParsed ? THEME.colors.bgBase : "#FBF9FD",
+                border: `2px solid ${isParsed ? THEME.colors.ink : THEME.colors.lineHair}`,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                transform: `scale(${0.98 + rowFill * 0.02})`,
+              }}
+            >
+              {/* Col 1 pill */}
+              <div style={{ width: 98, display: "flex", alignItems: "center" }}>
+                <div
+                  style={{
+                    width: widths[0],
+                    height: 12,
+                    borderRadius: 6,
+                    backgroundColor: isParsed ? THEME.colors.magenta : THEME.colors.deskSide,
+                  }}
+                />
+              </div>
+              {/* Col 2 pill */}
+              <div style={{ width: 112, display: "flex", alignItems: "center" }}>
+                <div
+                  style={{
+                    width: widths[1],
+                    height: 12,
+                    borderRadius: 6,
+                    backgroundColor: isParsed ? THEME.colors.ink : THEME.colors.deskSide,
+                  }}
+                />
+              </div>
+              {/* Col 3 pill */}
+              <div style={{ width: 76, display: "flex", alignItems: "center" }}>
+                <div
+                  style={{
+                    width: widths[2],
+                    height: 12,
+                    borderRadius: 6,
+                    backgroundColor: isParsed ? THEME.colors.cyan : THEME.colors.deskSide,
+                  }}
+                />
+              </div>
+              {/* Parsed row status dot */}
+              <div
+                style={{
+                  width: 18,
+                  height: 18,
+                  borderRadius: "50%",
+                  backgroundColor: isParsed ? THEME.colors.cyan : THEME.colors.deskSide,
+                  border: `2px solid ${THEME.colors.ink}`,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  flexShrink: 0,
+                }}
+              >
+                {isParsed && (
+                  <svg width={10} height={10} viewBox="0 0 10 10">
+                    <path
+                      d="M 2 5 L 4.2 7.2 L 8.2 2.8"
+                      fill="none"
+                      stroke={THEME.colors.ink}
+                      strokeWidth={2}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                )}
+              </div>
+            </div>
+          );
+        })}
+
+        {/* Sweeping cyan scan beam */}
+        {scanActive && (
+          <div
+            style={{
+              position: "absolute",
+              left: 14,
+              right: 14,
+              top: 16 + scanProgress * 186,
+              height: 5,
+              borderRadius: 3,
+              backgroundColor: THEME.colors.cyan,
+              boxShadow: "0 0 16px rgba(34,211,238,0.85)",
+              opacity: clampInterp(frame, [193, 198], [1, 0]),
+            }}
+          />
+        )}
+      </div>
+    </div>
+  );
+};
+
+// ============================================================================
+// ARENA MODULE 3: "TINY VM" — STACKED VM BLOCKS PROOF (ZERO CODE/OPCODES)
+// ============================================================================
+const VM_STACK_BLOCKS: readonly {
+  bay: number;
+  slot: number;
+  color: string;
+  accent: string;
+  delay: number;
+}[] = [
+  { bay: 0, slot: 0, color: THEME.colors.ink, accent: THEME.colors.cyan, delay: 186 },
+  { bay: 0, slot: 1, color: THEME.colors.surfaceSoft, accent: THEME.colors.magenta, delay: 190 },
+  { bay: 1, slot: 0, color: THEME.colors.magenta, accent: "#FFFFFF", delay: 194 },
+  { bay: 1, slot: 1, color: THEME.colors.ink, accent: THEME.colors.cyan, delay: 198 },
+  { bay: 2, slot: 0, color: THEME.colors.cyan, accent: THEME.colors.ink, delay: 202 },
+  { bay: 2, slot: 1, color: THEME.colors.surface, accent: THEME.colors.magenta, delay: 206 },
+];
+
+const TinyVmModule = ({
+  frame,
+  fps,
+  left,
+  top,
+  scale,
+  rotateX,
+  opacity,
+}: {
+  frame: number;
+  fps: number;
+  left: number;
+  top: number;
+  scale: number;
+  rotateX: number;
+  opacity: number;
+}) => {
+  const busActive = clampInterp(frame, [206, 218], [0, 1], THEME.ease.outCubic);
+  const vmReady = frame >= 214;
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left,
+        top,
+        width: 640,
+        height: 274,
+        opacity,
+        transform: `perspective(1200px) rotateX(${rotateX}deg) scale(${scale})`,
+        transformOrigin: "50% 50%",
+        borderRadius: 22,
+        backgroundColor: THEME.colors.surface,
+        border: `3px solid ${THEME.colors.ink}`,
+        boxShadow:
+          "0 12px 24px rgba(25,20,25,0.13), 0 28px 50px rgba(25,20,25,0.09)",
+        overflow: "hidden",
+        display: "flex",
+        flexDirection: "column",
+      }}
+    >
+      {/* Header strip — verbatim "TINY VM" */}
+      <div
+        style={{
+          height: 58,
+          paddingLeft: 22,
+          paddingRight: 22,
+          borderBottom: `2px solid ${THEME.colors.lineHair}`,
+          backgroundColor: THEME.colors.surfaceSoft,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 11 }}>
+          <div
+            style={{
+              display: "flex",
+              gap: 3,
+            }}
+          >
+            <div
+              style={{
+                width: 8,
+                height: 14,
+                borderRadius: 2,
+                backgroundColor: THEME.colors.ink,
+              }}
+            />
+            <div
+              style={{
+                width: 8,
+                height: 14,
+                borderRadius: 2,
+                backgroundColor: THEME.colors.magenta,
+              }}
+            />
+          </div>
+          <span
+            style={{
+              fontFamily: THEME.font,
+              fontSize: 27,
+              fontWeight: 900,
+              letterSpacing: "0.04em",
+              color: THEME.colors.ink,
+            }}
+          >
+            {COPY.modules.vm}
+          </span>
+        </div>
+        <div
+          style={{
+            width: 16,
+            height: 16,
+            borderRadius: "50%",
+            backgroundColor: vmReady ? THEME.colors.cyan : THEME.colors.deskSide,
+            border: `2px solid ${THEME.colors.ink}`,
+          }}
+        />
+      </div>
+
+      {/* 3-bay architectural VM block rack */}
+      <div
+        style={{
+          position: "relative",
+          flex: 1,
+          padding: "20px 26px 22px 26px",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+        }}
+      >
+        {[0, 1, 2].map((bayIdx) => {
+          const bayBlocks = VM_STACK_BLOCKS.filter((b) => b.bay === bayIdx);
+          return (
+            <div
+              key={bayIdx}
+              style={{
+                position: "relative",
+                width: 166,
+                height: 164,
+                borderRadius: 14,
+                backgroundColor: THEME.colors.bgBase,
+                border: `2px dashed ${THEME.colors.deskStroke}`,
+                padding: 12,
+                display: "flex",
+                flexDirection: "column-reverse",
+                gap: 12,
+              }}
+            >
+              {bayBlocks.map((block) => {
+                const p = spring({
+                  frame: Math.max(0, frame - block.delay),
+                  fps,
+                  config: THEME.spring.snappy,
+                });
+                const dropY = interpolate(p, [0, 1], [-52, 0], {
+                  extrapolateLeft: "clamp",
+                  extrapolateRight: "clamp",
+                });
+                const blockScale = interpolate(p, [0, 1], [0.88, 1], {
+                  extrapolateLeft: "clamp",
+                  extrapolateRight: "clamp",
+                });
+                return (
+                  <div
+                    key={`${block.bay}-${block.slot}`}
+                    style={{
+                      height: 62,
+                      borderRadius: 10,
+                      backgroundColor: block.color,
+                      border: `2.5px solid ${THEME.colors.ink}`,
+                      boxShadow: "0 4px 0 rgba(25,20,25,0.14)",
+                      opacity: clamp01(p * 1.4),
+                      transform: `translateY(${dropY}px) scale(${blockScale})`,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      paddingLeft: 14,
+                      paddingRight: 14,
+                    }}
+                  >
+                    {/* Pure geometric circuit pin array */}
+                    <div style={{ display: "flex", gap: 6 }}>
+                      <div
+                        style={{
+                          width: 26,
+                          height: 8,
+                          borderRadius: 4,
+                          backgroundColor: block.accent,
+                        }}
+                      />
+                      <div
+                        style={{
+                          width: 12,
+                          height: 8,
+                          borderRadius: 4,
+                          backgroundColor: block.accent,
+                          opacity: 0.55,
+                        }}
+                      />
+                    </div>
+                    <div
+                      style={{
+                        width: 12,
+                        height: 12,
+                        borderRadius: 3,
+                        backgroundColor: block.accent,
+                      }}
+                    />
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })}
+
+        {/* Inter-bay execution bus arrows */}
+        {[196, 408].map((arrowLeft, idx) => (
+          <svg
+            key={idx}
+            width={36}
+            height={28}
+            viewBox="0 0 36 28"
+            style={{
+              position: "absolute",
+              left: arrowLeft,
+              top: "50%",
+              transform: "translateY(-50%)",
+            }}
+          >
+            <path
+              d="M 2 14 L 26 14 M 20 7 L 28 14 L 20 21"
+              fill="none"
+              stroke={busActive > 0.35 ? THEME.colors.cyan : THEME.colors.deskStroke}
+              strokeWidth={4}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeDasharray={44}
+              strokeDashoffset={44 * (1 - clamp01(busActive * 1.2 - idx * 0.2))}
+            />
+          </svg>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+// ============================================================================
+// CONTINUOUS DESK -> POP-UP BOOK ARENA -> TARUHAN PUSH-IN WORLD (f0..325)
+// Single uninterrupted morph across HOOK, META, ARENA, TARUHAN, then folds clean
+// before PUNCHLINE settles. Max |rotateY| across all elements = 24deg (<= 30deg).
+// ============================================================================
+const DeskArenaWorld = () => {
+  const frame = useCurrentFrame(); // local 0..325 == global 0..325
+  const { fps } = useVideoConfig();
+
+  // --- Phase 1: Token push (f0..54) & slot lock detent (f60..68) ---
+  const pushT = clampInterp(frame, [0, 52], [0, 1], THEME.ease.inOutCubic);
+  const lockSpring = spring({
+    frame: Math.max(0, frame - 60),
+    fps,
+    config: THEME.spring.detent,
+  });
+  const isLocked = frame >= 60;
+
+  // --- Phase 2: Desk edge lift telegraph (f40..59) & Pop-Up Book Unfold (f68..112) ---
+  const edgeLift = clampInterp(frame, [40, 59], [0, 1], THEME.ease.outCubic);
+  const unfoldT = clampInterp(frame, [68, 112], [0, 1], THEME.ease.popUp);
+
+  // --- Phase 3: Arena circuit rails draw (f94..118) ---
+  const railDraw = clampInterp(frame, [94, 118], [0, 1], THEME.ease.outCubic);
+
+  // --- Phase 4: TARUHAN short dolly push-in (f240..266) then parked hold (f266..304) ---
+  const stakesPush = clampInterp(frame, [240, 266], [0, 1], THEME.ease.popUp);
+
+  // --- Phase 5: Arena collapses & clears cleanly before PUNCHLINE settles (f305..325) ---
+  const arenaExit = clampInterp(frame, [305, 325], [0, 1], THEME.ease.inCubic);
+  const worldOpacity = 1 - arenaExit;
+
+  // --- Desk camera orientation (strictly bounded yaw <= 10deg) ---
+  const deskRotateX =
+    20 - unfoldT * 12 - stakesPush * 2 + arenaExit * 10; // 20 -> 8 -> 6
+  const deskRotateY =
+    -10 + pushT * 4 + unfoldT * 6 - stakesPush * 4; // -10 -> -6 -> 0 -> -4 (max 10deg!)
+
+  // Desk vertical center shifts cleanly up once HOOK headline clears, then stabilizes
+  const deskBaseTop =
+    706 - unfoldT * 144 + stakesPush * 72 + arenaExit * 44; // HOOK 706 -> META/ARENA 562 -> TARUHAN 634
+  const deskBaseHeight = 472 + unfoldT * 144 - stakesPush * 48; // expands into full pop-up arena
+
+  // Pop-up side wing flaps (yaw strictly <= 24deg!)
+  const wingSlide = edgeLift * 14 + unfoldT * 66;
+  const leftWingYaw = 24 - edgeLift * 4 - unfoldT * 12; // 24deg -> 8deg
+  const rightWingYaw = -24 + edgeLift * 4 + unfoldT * 12; // -24deg -> -8deg
+
+  // --- Token continuous coordinates across all beats ---
+  const tokenStartX = 332;
+  const tokenLockedX = 540;
+  const tokenX =
+    tokenStartX +
+    pushT * (tokenLockedX - tokenStartX) +
+    (isLocked ? (1 - lockSpring) * -8 : 0);
+
+  // Token Y tracks desk slot cleanly from HOOK -> META/ARENA -> TARUHAN foreground anchor
+  const tokenY =
+    938 -
+    unfoldT * 92 + // settles at y=846 right between SOLVER/CSV and TINY VM
+    stakesPush * 34; // y=880 in TARUHAN foreground (cleanly above TINY VM header at y=960)
+
+  const tokenScale =
+    1 +
+    (isLocked ? Math.sin(clamp01(lockSpring) * Math.PI) * 0.045 : 0) +
+    stakesPush * 0.16 -
+    arenaExit * 0.1;
+
+  const tokenRotateY =
+    deskRotateY * (1 - stakesPush) + stakesPush * -7; // max |rotateY| = 10deg
+  const tokenRotateX =
+    (1 - unfoldT) * 8 * (1 - stakesPush);
+  const tokenElevation =
+    (isLocked ? 4 : 10) + unfoldT * 8 + stakesPush * 24;
+
+  // --- Uniform smooth mascot SVG cross-fades on identical #FFFFFF relief bed (zero flash) ---
+  const toPlayCross = clampInterp(frame, [135, 141], [0, 1], THEME.ease.outCubic);
+  const toFullCross = clampInterp(frame, [242, 248], [0, 1], THEME.ease.outCubic);
+  const happyOpacity = 1 - toPlayCross;
+  const playOpacity = toPlayCross * (1 - toFullCross);
+  const fullOpacity = toFullCross;
+
+  // --- Slot lock concentric pulse ring (f60..82) ---
+  const lockPulseT = clampInterp(frame, [60, 82], [0, 1], THEME.ease.outCubic);
+
+  // --- Module entrance & TARUHAN hero fan choreography ---
+  // 1) SOLVER: enters from left f135..152, straightens to 0deg for read, gently fans to +12deg in TARUHAN
+  const solverEnter = clampInterp(frame, [135, 152], [0, 1], THEME.ease.popUp);
+  const solverX =
+    136 + (1 - solverEnter) * -280 + stakesPush * 16;
+  const solverY =
+    454 + stakesPush * 176; // 454 in ARENA -> 630 in TARUHAN (50px clear below "$500 PRIZE POOL")
+  const solverScale =
+    0.9 + solverEnter * 0.1 - stakesPush * 0.1; // 1.0 in ARENA -> 0.90 in TARUHAN
+  const solverRotateY =
+    (1 - solverEnter) * 22 + stakesPush * 12; // 22deg -> 0deg (straight read!) -> 12deg
+
+  // 2) CSV: enters from right f151..169, straightens to 0deg for read, gently fans to -12deg in TARUHAN
+  const csvEnter = clampInterp(frame, [151, 169], [0, 1], THEME.ease.popUp);
+  const csvX =
+    556 + (1 - csvEnter) * 280 - stakesPush * 16;
+  const csvY =
+    482 + stakesPush * 162; // 482 in ARENA -> 644 in TARUHAN
+  const csvScale =
+    0.9 + csvEnter * 0.1 - stakesPush * 0.1;
+  const csvRotateY =
+    (1 - csvEnter) * -22 - stakesPush * 12; // -22deg -> 0deg (straight read!) -> -12deg
+
+  // 3) TINY VM: enters from bottom f169..188, straightens to 0deg for read, compacts cleanly in TARUHAN
+  const vmEnter = clampInterp(frame, [169, 188], [0, 1], THEME.ease.popUp);
+  const vmX = 220;
+  const vmY =
+    936 + (1 - vmEnter) * 230 + stakesPush * 24; // 936 in ARENA -> 960 in TARUHAN (bottom <= 1220)
+  const vmScale =
+    0.92 + vmEnter * 0.08 - stakesPush * 0.08;
+  const vmRotateX = (1 - vmEnter) * 16;
+
+  // --- Parallax layer offsets during TARUHAN short dolly (f240..266 then parked) ---
+  const bgParallaxScale = 1 + stakesPush * 0.05;
+  const bgParallaxY = stakesPush * 14;
+  const midParallaxScale = 1 + stakesPush * 0.03;
+  const fgBracketParallax = stakesPush * 26;
+
+  // Modules fade slightly earlier on exit so arena clears gracefully
+  const modulesExitOpacity = clampInterp(frame, [305, 316], [1, 0], THEME.ease.inCubic);
+
+  return (
+    <AbsoluteFill
+      style={{
+        opacity: worldOpacity,
+        transform: `scale(${1 - arenaExit * 0.06})`,
+        transformOrigin: "50% 60%",
+      }}
+    >
+      {/* LAYER 1 (BACKGROUND DEPTH, 0.35x PARALLAX): POP-UP DESK CHASSIS & HINGED WINGS */}
+      <div
+        style={{
+          position: "absolute",
+          inset: 0,
+          transform: `translateY(${bgParallaxY}px) scale(${bgParallaxScale})`,
+          transformOrigin: "50% 58%",
+        }}
+      >
+        {/* Ground desk shadow */}
+        <div
+          style={{
+            position: "absolute",
+            left: 168 - wingSlide * 0.25,
+            top: deskBaseTop + 34,
+            width: 744 + wingSlide * 0.5,
+            height: deskBaseHeight - 10,
+            borderRadius: 34,
+            backgroundColor: "rgba(25,20,25,0.10)",
+            filter: "blur(24px)",
+          }}
+        />
+
+        {/* Left Pop-Up Desk Wing (hinges outward cleanly, rotateY <= 24deg) */}
+        <div
+          style={{
+            position: "absolute",
+            left: 156 - wingSlide * 0.35,
+            top: deskBaseTop + 36,
+            width: 156,
+            height: deskBaseHeight - 72,
+            borderRadius: "24px 8px 8px 24px",
+            backgroundColor: THEME.colors.deskSide,
+            border: `3px solid ${THEME.colors.ink}`,
+            transform: `perspective(1400px) rotateX(${deskRotateX}deg) rotateY(${leftWingYaw}deg)`,
+            transformOrigin: "100% 50%",
+            opacity: 0.35 + edgeLift * 0.45 + unfoldT * 0.2,
+            boxShadow: "inset -10px 0 18px rgba(25,20,25,0.08)",
+          }}
+        />
+
+        {/* Right Pop-Up Desk Wing (hinges outward cleanly, |rotateY| <= 24deg) */}
+        <div
+          style={{
+            position: "absolute",
+            right: 156 - wingSlide * 0.35,
+            top: deskBaseTop + 36,
+            width: 156,
+            height: deskBaseHeight - 72,
+            borderRadius: "8px 24px 24px 8px",
+            backgroundColor: THEME.colors.deskSide,
+            border: `3px solid ${THEME.colors.ink}`,
+            transform: `perspective(1400px) rotateX(${deskRotateX}deg) rotateY(${rightWingYaw}deg)`,
+            transformOrigin: "0% 50%",
+            opacity: 0.35 + edgeLift * 0.45 + unfoldT * 0.2,
+            boxShadow: "inset 10px 0 18px rgba(25,20,25,0.08)",
+          }}
+        />
+
+        {/* Primary Desk Tabletop & Pop-Up Book Arena Floor */}
+        <div
+          style={{
+            position: "absolute",
+            left: 156,
+            top: deskBaseTop,
+            width: 768,
+            height: deskBaseHeight,
+            borderRadius: 30,
+            backgroundColor: THEME.colors.deskTop,
+            border: `3.5px solid ${THEME.colors.ink}`,
+            boxShadow:
+              "0 14px 0 #DDD4E8, 0 28px 46px rgba(25,20,25,0.11)",
+            transform: `perspective(1400px) rotateX(${deskRotateX}deg) rotateY(${deskRotateY}deg)`,
+            transformOrigin: "50% 55%",
+            overflow: "hidden",
+          }}
+        >
+          {/* Pop-up book central fold crease & architectural gusset shading */}
+          <div
+            style={{
+              position: "absolute",
+              left: 0,
+              right: 0,
+              top: "50%",
+              height: 2,
+              backgroundColor: THEME.colors.deskStroke,
+              opacity: 0.75,
+            }}
+          />
+          <div
+            style={{
+              position: "absolute",
+              left: "50%",
+              top: 0,
+              bottom: 0,
+              width: 2,
+              backgroundColor: THEME.colors.deskStroke,
+              opacity: 0.35 + unfoldT * 0.35,
+            }}
+          />
+
+          {/* Pop-up paper-engineering triangular struts visible as desk unfolds */}
+          <svg
+            width={768}
+            height={620}
+            viewBox="0 0 768 620"
+            style={{
+              position: "absolute",
+              inset: 0,
+              opacity: unfoldT * 0.9,
+            }}
+          >
+            <polygon
+              points={`28,28 ${28 + unfoldT * 108},28 28,${28 + unfoldT * 90}`}
+              fill={THEME.colors.magentaSoft}
+              stroke={THEME.colors.magenta}
+              strokeWidth={2}
+              strokeOpacity={0.35}
+            />
+            <polygon
+              points={`740,28 ${740 - unfoldT * 108},28 740,${28 + unfoldT * 90}`}
+              fill={THEME.colors.cyanSoft}
+              stroke={THEME.colors.cyan}
+              strokeWidth={2}
+              strokeOpacity={0.45}
+            />
+          </svg>
+
+          {/* Horizontal token guide track on desk surface */}
+          <div
+            style={{
+              position: "absolute",
+              left: 64,
+              top: "50%",
+              transform: "translateY(-50%)",
+              width: 392,
+              height: 44,
+              borderRadius: 12,
+              backgroundColor: THEME.colors.deskRecess,
+              border: `2px solid ${THEME.colors.deskStroke}`,
+              opacity: 1 - unfoldT * 0.82,
+            }}
+          />
+
+          {/* Recessed chamfered make.fun dock slot (pure brand geometry, zero extra text) */}
+          <div
+            style={{
+              position: "absolute",
+              left: "50%",
+              top: "50%",
+              width: 266,
+              height: 146,
+              transform: "translate(-50%, -50%)",
+              borderRadius: 20,
+              backgroundColor: isLocked
+                ? THEME.colors.cyanSoft
+                : THEME.colors.deskRecess,
+              border: `3px solid ${isLocked ? THEME.colors.cyan : THEME.colors.magenta}`,
+              boxShadow: "inset 0 6px 14px rgba(25,20,25,0.12)",
+            }}
+          >
+            {/* Slot mechanical alignment notches */}
+            <div
+              style={{
+                position: "absolute",
+                right: 10,
+                top: 34,
+                width: 12,
+                height: 72,
+                borderRadius: 6,
+                backgroundColor: isLocked ? THEME.colors.cyan : THEME.colors.magenta,
+              }}
+            />
+            {/* Top/bottom corner lock pips */}
+            {[
+              { left: 12, top: 10 },
+              { right: 12, top: 10 },
+              { left: 12, bottom: 10 },
+              { right: 12, bottom: 10 },
+            ].map((pos, i) => (
+              <div
+                key={i}
+                style={{
+                  position: "absolute",
+                  ...pos,
+                  width: 9,
+                  height: 9,
+                  borderRadius: 3,
+                  backgroundColor: isLocked ? THEME.colors.cyan : THEME.colors.deskStroke,
+                }}
+              />
+            ))}
+          </div>
+
+          {/* Lock confirmation shockwave ring (f60..82) */}
+          {frame >= 60 && frame <= 84 && (
+            <div
+              style={{
+                position: "absolute",
+                left: "50%",
+                top: "50%",
+                width: 250,
+                height: 150,
+                borderRadius: 28,
+                border: `4px solid ${THEME.colors.cyan}`,
+                transform: `translate(-50%, -50%) scale(${0.95 + lockPulseT * 0.9})`,
+                opacity: clamp01(1 - lockPulseT),
+              }}
+            />
+          )}
+        </div>
+
+        {/* Circuit/Track Rails drawing outward from locked token hub to 3 module sockets */}
+        {railDraw > 0.01 && (
+          <svg
+            width={1080}
+            height={1920}
+            viewBox="0 0 1080 1920"
+            style={{
+              position: "absolute",
+              inset: 0,
+              opacity: clamp01(railDraw) * (1 - stakesPush * 0.25),
+              pointerEvents: "none",
+            }}
+          >
+            {/* Rail to SOLVER */}
+            <path
+              d="M 460 806 L 330 806 L 330 742"
+              fill="none"
+              stroke={THEME.colors.magenta}
+              strokeWidth={6}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeDasharray={210}
+              strokeDashoffset={210 * (1 - railDraw)}
+            />
+            {/* Rail to CSV */}
+            <path
+              d="M 620 806 L 750 806 L 750 770"
+              fill="none"
+              stroke={THEME.colors.cyan}
+              strokeWidth={6}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeDasharray={184}
+              strokeDashoffset={184 * (1 - railDraw)}
+            />
+            {/* Dual Bus Rail to TINY VM */}
+            <path
+              d="M 500 906 L 500 940 M 580 906 L 580 940"
+              fill="none"
+              stroke={THEME.colors.ink}
+              strokeWidth={5}
+              strokeLinecap="round"
+              strokeDasharray={80}
+              strokeDashoffset={80 * (1 - railDraw)}
+            />
+          </svg>
+        )}
+      </div>
+
+      {/* LAYER 2 (MIDGROUND DEPTH, 0.70x PARALLAX): THREE MISSION MODULES (ARENA & TARUHAN) */}
+      {frame >= 135 && modulesExitOpacity > 0.01 && (
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            opacity: modulesExitOpacity,
+            transform: `scale(${midParallaxScale})`,
+            transformOrigin: "50% 60%",
+          }}
+        >
+          <SolverModule
+            frame={frame}
+            fps={fps}
+            left={solverX}
+            top={solverY}
+            scale={solverScale}
+            rotateY={solverRotateY}
+            opacity={clamp01(solverEnter * 1.6)}
+          />
+          {frame >= 151 && (
+            <CsvModule
+              frame={frame}
+              left={csvX}
+              top={csvY}
+              scale={csvScale}
+              rotateY={csvRotateY}
+              opacity={clamp01(csvEnter * 1.6)}
+            />
+          )}
+          {frame >= 169 && (
+            <TinyVmModule
+              frame={frame}
+              fps={fps}
+              left={vmX}
+              top={vmY}
+              scale={vmScale}
+              rotateX={vmRotateX}
+              opacity={clamp01(vmEnter * 1.6)}
+            />
+          )}
+        </div>
+      )}
+
+      {/* LAYER 3 (FOREGROUND DEPTH, 1.15x PARALLAX): CONTINUOUS "AI AGENT" TOKEN & PUSHING HAND */}
+      <AgentToken
+        x={tokenX}
+        y={tokenY}
+        scale={tokenScale}
+        rotateY={tokenRotateY}
+        rotateX={tokenRotateX}
+        elevation={tokenElevation}
+        isLocked={isLocked}
+        happyOpacity={happyOpacity}
+        playOpacity={playOpacity}
+        fullOpacity={fullOpacity}
+      />
+
+      <PushingHand
+        tokenLeftX={tokenX - 118}
+        tokenCenterY={tokenY}
+        frame={frame}
+      />
+
+      {/* Foreground depth corner framing brackets during TARUHAN dolly (pure geometry, parallax 1.15x) */}
+      {stakesPush > 0.02 && modulesExitOpacity > 0.01 && (
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            opacity: stakesPush * modulesExitOpacity * 0.9,
+            pointerEvents: "none",
+          }}
+        >
+          {/* Upper-left foreground bracket */}
+          <div
+            style={{
+              position: "absolute",
+              left: 144 - fgBracketParallax * 0.4,
+              top: 616 - fgBracketParallax * 0.3,
+              width: 34,
+              height: 34,
+              borderTop: `5px solid ${THEME.colors.magenta}`,
+              borderLeft: `5px solid ${THEME.colors.magenta}`,
+              borderTopLeftRadius: 8,
+            }}
+          />
+          {/* Lower-right foreground bracket */}
+          <div
+            style={{
+              position: "absolute",
+              right: 144 - fgBracketParallax * 0.4,
+              top: 1182 + fgBracketParallax * 0.3,
+              width: 34,
+              height: 34,
+              borderBottom: `5px solid ${THEME.colors.cyan}`,
+              borderRight: `5px solid ${THEME.colors.cyan}`,
+              borderBottomRightRadius: 8,
+            }}
+          />
+        </div>
+      )}
+    </AbsoluteFill>
+  );
+};
+
+// ============================================================================
+// TARUHAN HEADLINE (f240..314) — "$500 PRIZE POOL"
+// Separate camera-facing headline (not a balance/payout UI).
+// Lands sharply and stops completely by global f257 (<= f262 deadline!).
+// Safe zone x132..948, y468..582 (44px clear below badge box y424).
+// ============================================================================
+const StakesHeadline = () => {
+  const frame = useCurrentFrame(); // local 0..74 == global 240..314
+
+  // Fast crisp entrance local f0..16 (global f240..256), dead-still local f17..64 (global f257..304)
+  const enterT = clampInterp(frame, [0, 16], [0, 1], THEME.ease.popUp);
+  const exitT = clampInterp(frame, [65, 74], [0, 1], THEME.ease.inCubic);
+
+  const opacity = enterT * (1 - exitT);
+  const translateY = (1 - enterT) * 28 + exitT * -26;
+  const scale = 0.95 + enterT * 0.05 - exitT * 0.03;
+  const barProgress = clampInterp(frame, [5, 16], [0, 1], THEME.ease.outCubic);
+
+  const firstSpaceIdx = COPY.stakes.indexOf(" ");
+  const amountPart = COPY.stakes.slice(0, firstSpaceIdx); // "$500"
+  const labelPart = COPY.stakes.slice(firstSpaceIdx + 1); // "PRIZE POOL"
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: 132,
+        top: 468,
+        width: 816,
+        opacity,
+        transform: `translateY(${translateY}px) scale(${scale})`,
+        transformOrigin: "50% 50%",
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "baseline",
+          justifyContent: "center",
+          columnGap: 20,
+          fontFamily: THEME.font,
+          fontSize: 80,
+          fontWeight: 900,
+          lineHeight: 1.04,
+          letterSpacing: "-0.03em",
+          whiteSpace: "nowrap",
+        }}
+      >
+        <span style={{ color: THEME.colors.magenta }}>{amountPart}</span>
+        <span style={{ color: THEME.colors.ink }}>{labelPart}</span>
+      </div>
+      {/* Precision brand divider rule — settled completely by global f256 */}
+      <div
+        style={{
+          marginTop: 14,
+          width: 248,
+          height: 6,
+          borderRadius: 3,
+          background: `linear-gradient(90deg, ${THEME.colors.magenta} 0%, ${THEME.colors.cyan} 100%)`,
+          transform: `scaleX(${barProgress})`,
+          transformOrigin: "50% 50%",
+        }}
+      />
+    </div>
+  );
+};
+
+// ============================================================================
+// PUNCHLINE (f315..374) — "Enter your AI agent on make.fun."
+// Arena completely stopped & cleared; zero competing mission labels.
+// Words settle completely by local f13 (global f328), then 100% still & sharp
+// across local f14..59 (global f329..374 — full coverage of target f330..374!).
+// Safe zone x140..940, y680..940.
+// ============================================================================
+const PunchlineBeat = () => {
+  const frame = useCurrentFrame(); // local 0..59 == global 315..374
+  const words = COPY.punchline.split(" ");
+
+  const horizonScale = clampInterp(frame, [0, 12], [0.2, 1], THEME.ease.outCubic);
+  const brandGlow = clampInterp(frame, [8, 14], [0, 0.22], THEME.ease.outCubic);
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: 140,
+        top: 696,
+        width: 800,
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          flexWrap: "wrap",
+          justifyContent: "center",
+          columnGap: 18,
+          rowGap: 10,
+          maxWidth: 760,
+        }}
+      >
+        {words.map((word, idx) => {
+          // 6 words staggered by 1.4 frames, 6-frame settle -> last word finishes at local f13 (global f328)
+          const start = idx * 1.4;
+          const end = start + 6;
+          const p = clampInterp(frame, [start, end], [0, 1], THEME.ease.outCubic);
+          const isBrandWord = idx === words.length - 1;
+          const brandCore = isBrandWord ? word.slice(0, word.length - 1) : word;
+          const brandDot = isBrandWord ? word.slice(word.length - 1) : "";
+
+          return (
+            <span
+              key={idx}
+              style={{
+                position: "relative",
+                display: "inline-block",
+                fontFamily: THEME.font,
+                fontSize: 74,
+                fontWeight: 800,
+                lineHeight: 1.12,
+                letterSpacing: "-0.03em",
+                color: THEME.colors.ink,
+                opacity: p,
+                transform: `translateY(${(1 - p) * 20}px)`,
+              }}
+            >
+              {isBrandWord ? (
+                <>
+                  <span
+                    style={{
+                      position: "absolute",
+                      left: -18,
+                      right: -12,
+                      top: -8,
+                      bottom: -8,
+                      borderRadius: 999,
+                      background: `radial-gradient(ellipse at center, rgba(196,28,131,${brandGlow}) 0%, rgba(196,28,131,0) 72%)`,
+                      pointerEvents: "none",
+                    }}
+                  />
+                  <span style={{ position: "relative", color: THEME.colors.magenta }}>
+                    {brandCore}
+                  </span>
+                  <span style={{ position: "relative", color: THEME.colors.ink }}>
+                    {brandDot}
+                  </span>
+                </>
+              ) : (
+                word
+              )}
+            </span>
+          );
+        })}
+      </div>
+
+      {/* Minimal static studio horizon accent (frozen from global f327 onward) */}
+      <div
+        style={{
+          marginTop: 42,
+          width: 144,
+          height: 5,
+          borderRadius: 3,
+          background: `linear-gradient(90deg, ${THEME.colors.magenta} 0%, ${THEME.colors.cyan} 100%)`,
+          transform: `scaleX(${horizonScale})`,
+          transformOrigin: "50% 50%",
+        }}
+      />
+    </div>
+  );
+};
+
+// ============================================================================
+// TENANG CALM END PLATE (f375..449)
+// Zero text, zero animation — clean light plate for official ffmpeg end card.
+// ============================================================================
+const CalmEndPlate = () => {
+  return (
+    <AbsoluteFill style={{ pointerEvents: "none" }}>
+      <div
+        style={{
+          position: "absolute",
+          left: 240,
+          right: 240,
+          top: 1084,
+          height: 2,
+          background: `linear-gradient(90deg, transparent 0%, ${THEME.colors.lineHair} 50%, transparent 100%)`,
+          opacity: 0.75,
+        }}
+      />
+    </AbsoluteFill>
+  );
+};
+
+// ============================================================================
+// ROOT COMPOSITION COMPONENT: AdDesk (1080x1920, 30fps, 450 frames)
+// ============================================================================
+export const AdDesk = () => {
+  const frame = useCurrentFrame();
+  const isCalmPlate = frame >= BEATS.calmStart;
+
+  return (
+    <AbsoluteFill
+      style={{
+        width: 1080,
+        height: 1920,
+        fontFamily: THEME.font,
+        overflow: "hidden",
+      }}
+    >
+      {/* Persistent light studio plate (simplifies & freezes cleanly on TENANG) */}
+      <StudioBackdrop frame={frame} isCalmPlate={isCalmPlate} />
+
+      {/* Continuous Desk -> Pop-Up Arena -> Taruhan World (unmounts at f326 so Punchline has zero competing hero) */}
+      <Sequence from={0} durationInFrames={326}>
+        <DeskArenaWorld />
+      </Sequence>
+
+      {/* Persistent small label "make.fun contest" across all content beats f0..374 (absent on TENANG f375..449) */}
+      <Sequence from={0} durationInFrames={BEATS.calmStart}>
+        <KickerLabel />
+      </Sequence>
+
+      {/* Beat 1: HOOK headline (f0..59, sharp at f0) */}
+      <Sequence from={BEATS.hookStart} durationInFrames={BEATS.hookDuration}>
+        <HookHeadline />
+      </Sequence>
+
+      {/* Beat 4: TARUHAN separate camera-facing headline (f240..314, sharp & still by f257 <= f262) */}
+      <Sequence from={BEATS.stakesStart} durationInFrames={BEATS.stakesDuration}>
+        <StakesHeadline />
+      </Sequence>
+
+      {/* Beat 5: PUNCHLINE closing sentence (f315..374, 100% still & sharp f329..374) */}
+      <Sequence from={BEATS.punchStart} durationInFrames={BEATS.punchDuration}>
+        <PunchlineBeat />
+      </Sequence>
+
+      {/* Beat 6: TENANG quiet end plate (f375..449, zero text, zero extra animation) */}
+      <Sequence from={BEATS.calmStart} durationInFrames={BEATS.calmDuration}>
+        <CalmEndPlate />
+      </Sequence>
+    </AbsoluteFill>
+  );
+};
+
+export default AdDesk;

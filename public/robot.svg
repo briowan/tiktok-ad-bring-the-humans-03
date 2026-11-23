@@ -1,0 +1,124 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 500" width="100%" height="100%">
+  <defs>
+    
+    <radialGradient id="bg" cx="50%" cy="50%" r="60%">
+      <stop offset="0%" stop-color="#FFFFFF" />
+      <stop offset="100%" stop-color="#E2E8F0" />
+    </radialGradient>
+
+    
+    <linearGradient id="cyanNeon" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00C6FF" />
+      <stop offset="100%" stop-color="#0072FF" />
+    </linearGradient>
+    <linearGradient id="magentaNeon" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FF0844" />
+      <stop offset="100%" stop-color="#FFB199" />
+    </linearGradient>
+
+    
+    <filter id="glowSubtle" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="4" result="blur" />
+      <feMerge>
+        <feMergeNode in="blur" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+    <filter id="glowStrong" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="10" result="blur" />
+      <feMerge>
+        <feMergeNode in="blur" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+    
+    
+    <filter id="dropShadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="8" stdDeviation="6" flood-color="#94A3B8" flood-opacity="0.3" />
+    </filter>
+  </defs>
+
+  
+  <rect width="500" height="500" fill="url(#bg)" />
+
+  
+  <path d="M 50 150 C 150 50 350 50 450 150" fill="none" stroke="#94A3B8" stroke-width="2" stroke-opacity="0.4" stroke-dasharray="6,6" />
+  <path d="M 50 350 C 150 450 350 450 450 350" fill="none" stroke="url(#magentaNeon)" stroke-width="3" opacity="0.4" />
+  <circle cx="250" cy="425" r="5" fill="#FF0844" filter="url(#glowStrong)" />
+  
+  <rect x="70" y="110" width="8" height="8" fill="#00C6FF" transform="rotate(45 74 114)" />
+
+  
+  
+  
+  <g transform="translate(0, 10)">
+    
+    
+    
+    <g transform="translate(110, 140) rotate(-25)">
+      <polygon points="0,-45 40,0 0,45 -40,0" fill="#F8FAFC" stroke="url(#cyanNeon)" stroke-width="5" stroke-linejoin="round" filter="url(#dropShadow)" />
+      <polygon points="0,-20 20,0 0,20 -20,0" fill="url(#cyanNeon)" filter="url(#glowSubtle)" />
+    </g>
+    
+    <g transform="translate(390, 140) rotate(25)">
+      <polygon points="0,-45 40,0 0,45 -40,0" fill="#F8FAFC" stroke="url(#magentaNeon)" stroke-width="5" stroke-linejoin="round" filter="url(#dropShadow)" />
+      <polygon points="0,-20 20,0 0,20 -20,0" fill="url(#magentaNeon)" filter="url(#glowSubtle)" />
+    </g>
+
+    
+    <line x1="250" y1="90" x2="250" y2="50" stroke="#94A3B8" stroke-width="4" stroke-opacity="0.6" />
+    <circle cx="250" cy="45" r="10" fill="url(#cyanNeon)" filter="url(#glowStrong)" />
+
+    
+    <path d="M 190 240 L 310 240 C 320 330 290 350 250 350 C 210 350 180 330 190 240 Z" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="4" filter="url(#dropShadow)" />
+    
+    <polygon points="250,285 270,305 250,325 230,305" fill="url(#magentaNeon)" filter="url(#glowSubtle)" />
+
+    
+    <rect x="130" y="80" width="240" height="190" rx="75" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="6" filter="url(#dropShadow)" />
+    
+    
+    <rect x="150" y="100" width="200" height="150" rx="60" fill="#0F172A" />
+
+    
+    
+    <rect x="180" y="140" width="45" height="55" rx="20" fill="url(#cyanNeon)" filter="url(#glowSubtle)" />
+    
+    <polygon points="195,155 212,167.5 195,180" fill="#0F172A" />
+
+    
+    <rect x="275" y="140" width="45" height="55" rx="20" fill="url(#cyanNeon)" filter="url(#glowSubtle)" />
+    
+    <polygon points="290,155 307,167.5 290,180" fill="#0F172A" />
+
+    
+    <circle cx="170" cy="200" r="12" fill="#FF0844" opacity="0.8" filter="url(#glowSubtle)" />
+    <circle cx="330" cy="200" r="12" fill="#FF0844" opacity="0.8" filter="url(#glowSubtle)" />
+
+    
+    <path d="M 235 205 Q 250 220 265 205" fill="none" stroke="#FFFFFF" stroke-width="4" stroke-linecap="round" />
+
+    
+    <rect x="330" y="130" width="18" height="60" rx="9" fill="#FF0844" stroke="#FFFFFF" stroke-width="2" />
+    
+    <path d="M 340 180 Q 350 230 290 235" fill="none" stroke="#94A3B8" stroke-width="4" stroke-linecap="round" />
+    <circle cx="290" cy="235" r="6" fill="#00C6FF" filter="url(#glowStrong)" />
+    
+    
+    
+    <rect x="90" y="260" width="55" height="55" rx="20" fill="#FFFFFF" stroke="url(#cyanNeon)" stroke-width="4" transform="rotate(-15 115 285)" filter="url(#dropShadow)" />
+    <path d="M 105 285 L 125 285" fill="none" stroke="url(#cyanNeon)" stroke-width="4" stroke-linecap="round" />
+    
+    
+    <rect x="355" y="260" width="55" height="55" rx="20" fill="#FFFFFF" stroke="url(#magentaNeon)" stroke-width="4" transform="rotate(15 380 285)" filter="url(#dropShadow)" />
+    <path d="M 375 285 L 395 285" fill="none" stroke="url(#magentaNeon)" stroke-width="4" stroke-linecap="round" />
+
+    
+    <g fill="#00C6FF" opacity="0.9">
+      <rect x="305" y="225" width="4" height="20" rx="2" />
+      <rect x="313" y="215" width="4" height="30" rx="2" />
+      <rect x="321" y="220" width="4" height="25" rx="2" />
+    </g>
+
+  </g>
+</svg>

@@ -1,0 +1,2023 @@
+import {
+  AbsoluteFill,
+  Easing,
+  Img,
+  interpolate,
+  staticFile,
+  useCurrentFrame,
+} from "remotion";
+
+export const AD_V4_WIDTH = 1080;
+export const AD_V4_HEIGHT = 1920;
+export const AD_V4_FPS = 30;
+export const AD_V4_DURATION = 450;
+
+// Brand & surface tokens (@jup.creatives bright editorial palette)
+const COLOR = {
+  bgBase: "#FAF9FC",
+  bgWarm: "#FFFFFF",
+  magenta: "#c41c83",
+  magentaDark: "#9b1467",
+  magentaSoft: "#FDF1F8",
+  cyan: "#22d3ee",
+  cyanDeep: "#0e7490",
+  cyanSoft: "#ECFEFF",
+  ink: "#191419",
+  inkMuted: "#544B57",
+  inkSoft: "#7A707D",
+  border: "rgba(25, 20, 25, 0.10)",
+  borderStrong: "rgba(25, 20, 25, 0.16)",
+  slabLight: "#ECE6F0",
+  slabMid: "#D8CFDF",
+  slabDark: "#C2B6CB",
+};
+
+const FONT_SANS = 'Arial, "Helvetica Neue", Helvetica, sans-serif';
+const FONT_MONO = '"Courier New", Consolas, Menlo, monospace';
+
+// Safe zone: x120-960 (width 840), y269-1248.
+// Badge exclusion zone (ffmpeg): x96-474, y248-424 -> kept strictly clear.
+const SAFE_X = 120;
+const SAFE_W = 840;
+
+const EASE_OUT_CUBIC = Easing.out(Easing.cubic);
+const EASE_IN_OUT_CUBIC = Easing.inOut(Easing.cubic);
+const EASE_OUT_QUINT = Easing.out(Easing.poly(5));
+const EASE_IN_CUBIC = Easing.in(Easing.cubic);
+const EASE_SNAP = Easing.bezier(0.18, 0.96, 0.24, 1);
+
+const lerp = (
+  value: number,
+  inStart: number,
+  inEnd: number,
+  outStart: number,
+  outEnd: number,
+  easing?: (t: number) => number
+): number =>
+  interpolate(value, [inStart, inEnd], [outStart, outEnd], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+    easing,
+  });
+
+const formatDotNumber = (value: number): string => {
+  const rounded = Math.max(0, Math.round(value));
+  return rounded.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+};
+
+/**
+ * Shared bright editorial background across all 6 beats.
+ * No backdrop-filter; purely deterministic gradients & whisper-light grid.
+ */
+const EditorialBackground = ({
+  accentShiftX = 0,
+  accentShiftY = 0,
+  showSubtleGrid = true,
+  calmMode = false,
+}: {
+  accentShiftX?: number;
+  accentShiftY?: number;
+  showSubtleGrid?: boolean;
+  calmMode?: boolean;
+}) => {
+  const magentaAlpha = calmMode ? 0.07 : 0.1;
+  const cyanAlpha = calmMode ? 0.08 : 0.11;
+
+  return (
+    <AbsoluteFill
+      style={{
+        backgroundColor: COLOR.bgBase,
+        overflow: "hidden",
+      }}
+    >
+      {/* Top-right magenta wash */}
+      <div
+        style={{
+          position: "absolute",
+          left: 500 + accentShiftX,
+          top: -80 + accentShiftY,
+          width: 820,
+          height: 820,
+          borderRadius: 999,
+          background: `radial-gradient(circle, rgba(196, 28, 131, ${magentaAlpha}) 0%, rgba(196, 28, 131, 0) 68%)`,
+        }}
+      />
+      {/* Lower-left cyan wash */}
+      <div
+        style={{
+          position: "absolute",
+          left: -240 - accentShiftX * 0.6,
+          top: 940 - accentShiftY * 0.5,
+          width: 900,
+          height: 900,
+          borderRadius: 999,
+          background: `radial-gradient(circle, rgba(34, 211, 238, ${cyanAlpha}) 0%, rgba(34, 211, 238, 0) 68%)`,
+        }}
+      />
+      {/* Subtle center lift */}
+      <div
+        style={{
+          position: "absolute",
+          left: 140,
+          top: 380,
+          width: 800,
+          height: 880,
+          borderRadius: 999,
+          background:
+            "radial-gradient(circle, rgba(255, 255, 255, 0.92) 0%, rgba(255, 255, 255, 0) 72%)",
+        }}
+      />
+      {showSubtleGrid && (
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            backgroundImage:
+              "linear-gradient(to right, rgba(25,20,25,0.032) 1px, transparent 1px), linear-gradient(to bottom, rgba(25,20,25,0.032) 1px, transparent 1px)",
+            backgroundSize: "72px 72px",
+            opacity: calmMode ? 0.35 : 0.75,
+          }}
+        />
+      )}
+    </AbsoluteFill>
+  );
+};
+
+/**
+ * Renders true physical card slab thickness along Z plus a grounded drop shadow.
+ * Must be placed inside a `transformStyle: "preserve-3d"` card container.
+ * Opacity is applied on leaf slabs (never on the preserve-3d wrapper) to prevent CSS 3D flattening.
+ */
+const CardSlabLayers = ({
+  width,
+  height,
+  radius,
+  depth = 10,
+  edgeLight = COLOR.slabLight,
+  edgeMid = COLOR.slabMid,
+  edgeDark = COLOR.slabDark,
+  shadowOpacity = 0.14,
+  shadowOffsetY = 20,
+  shadowOffsetX = 0,
+  opacity = 1,
+}: {
+  width: number;
+  height: number;
+  radius: number;
+  depth?: number;
+  edgeLight?: string;
+  edgeMid?: string;
+  edgeDark?: string;
+  shadowOpacity?: number;
+  shadowOffsetY?: number;
+  shadowOffsetX?: number;
+  opacity?: number;
+}) => {
+  const step = depth / 5;
+  const layers = [
+    { z: -step * 5, bg: edgeDark },
+    { z: -step * 4, bg: edgeDark },
+    { z: -step * 3, bg: edgeMid },
+    { z: -step * 2, bg: edgeMid },
+    { z: -step * 1, bg: edgeLight },
+  ];
+
+  return (
+    <>
+      {/* Grounded ambient cast shadow behind slab */}
+      <div
+        style={{
+          position: "absolute",
+          left: shadowOffsetX,
+          top: shadowOffsetY,
+          width,
+          height,
+          borderRadius: radius,
+          backgroundColor: `rgba(25, 20, 25, ${shadowOpacity})`,
+          filter: "blur(24px)",
+          transform: `translateZ(${-depth - 14}px) scale(0.96)`,
+          opacity,
+        }}
+      />
+      {/* Stacked physical card edge layers */}
+      {layers.map((layer, index) => (
+        <div
+          key={index}
+          style={{
+            position: "absolute",
+            left: 0,
+            top: 0,
+            width,
+            height,
+            borderRadius: radius,
+            backgroundColor: layer.bg,
+            border: "1px solid rgba(25, 20, 25, 0.08)",
+            transform: `translateZ(${layer.z}px)`,
+            opacity,
+          }}
+        />
+      ))}
+    </>
+  );
+};
+
+/**
+ * Angle-reactive specular light glint rendered inside the clipped front face of a 3D card.
+ */
+const CardSpecularSheen = ({ rotateY }: { rotateY: number }) => {
+  const angleIntensity = Math.min(1, Math.abs(rotateY) / 26);
+  const sheenShift = interpolate(rotateY, [-32, 32], [-220, 220], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+  });
+
+  if (angleIntensity < 0.03) {
+    return null;
+  }
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        inset: 0,
+        pointerEvents: "none",
+        background:
+          "linear-gradient(112deg, rgba(255,255,255,0) 24%, rgba(255,255,255,0.62) 48%, rgba(255,255,255,0) 72%)",
+        transform: `translateX(${sheenShift}px)`,
+        opacity: angleIntensity * 0.55,
+      }}
+    />
+  );
+};
+
+/**
+ * Unified rounded 3D Mascot Card used across HOOK, ARENA, and PUNCHLINE.
+ * Identical card surface treatment guarantees zero background flash when changing SVG pose.
+ */
+const MascotCard3D = ({
+  asset,
+  left,
+  top,
+  width,
+  height,
+  translateX = 0,
+  translateY = 0,
+  translateZ = 0,
+  rotateX = 0,
+  rotateY = 0,
+  rotateZ = 0,
+  scale = 1,
+  opacity = 1,
+  depth = 10,
+  padding = 24,
+  haloStrength = 0,
+}: {
+  asset: "mascot-tilt-happy.svg" | "mascot-tilt-play.svg" | "mascot-full-play.svg";
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  translateX?: number;
+  translateY?: number;
+  translateZ?: number;
+  rotateX?: number;
+  rotateY?: number;
+  rotateZ?: number;
+  scale?: number;
+  opacity?: number;
+  depth?: number;
+  padding?: number;
+  haloStrength?: number;
+}) => {
+  const radius = 30;
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left,
+        top,
+        width,
+        height,
+        transformStyle: "preserve-3d",
+        transform: `translate3d(${translateX}px, ${translateY}px, ${translateZ}px) rotateY(${rotateY}deg) rotateX(${rotateX}deg) rotateZ(${rotateZ}deg) scale(${scale})`,
+      }}
+    >
+      {haloStrength > 0.01 && (
+        <div
+          style={{
+            position: "absolute",
+            left: -42,
+            top: -42,
+            width: width + 84,
+            height: height + 84,
+            borderRadius: 60,
+            background:
+              "radial-gradient(circle at 32% 30%, rgba(196,28,131,0.22) 0%, rgba(34,211,238,0.18) 52%, rgba(255,255,255,0) 76%)",
+            transform: "translateZ(-28px)",
+            opacity: haloStrength * opacity,
+          }}
+        />
+      )}
+
+      <CardSlabLayers
+        width={width}
+        height={height}
+        radius={radius}
+        depth={depth}
+        shadowOpacity={0.16}
+        shadowOffsetY={24}
+        shadowOffsetX={-rotateY * 0.65}
+        opacity={opacity}
+      />
+
+      {/* Unified front surface (identical across all mascot poses) */}
+      <div
+        style={{
+          position: "absolute",
+          inset: 0,
+          borderRadius: radius,
+          background:
+            "linear-gradient(155deg, #FFFFFF 0%, #FAF6FA 58%, #F2FAFD 100%)",
+          border: `1.5px solid ${COLOR.borderStrong}`,
+          boxShadow: "inset 0 2px 0 rgba(255, 255, 255, 0.96)",
+          overflow: "hidden",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          padding,
+          boxSizing: "border-box",
+          transform: "translateZ(0.5px)",
+          opacity,
+        }}
+      >
+        {/* Subtle studio radial backdrop inside card (identical for every pose) */}
+        <div
+          style={{
+            position: "absolute",
+            inset: 14,
+            borderRadius: radius - 10,
+            background:
+              "radial-gradient(circle at 50% 54%, rgba(196, 28, 131, 0.065) 0%, rgba(34, 211, 238, 0.055) 48%, rgba(255, 255, 255, 0) 78%)",
+          }}
+        />
+        {/* Crisp top accent hairline */}
+        <div
+          style={{
+            position: "absolute",
+            left: 26,
+            right: 26,
+            top: 0,
+            height: 4,
+            borderBottomLeftRadius: 4,
+            borderBottomRightRadius: 4,
+            background: `linear-gradient(90deg, ${COLOR.magenta} 0%, ${COLOR.cyan} 100%)`,
+            opacity: 0.85,
+          }}
+        />
+        <Img
+          src={staticFile(asset)}
+          style={{
+            position: "relative",
+            width: "100%",
+            height: "100%",
+            objectFit: "contain",
+            display: "block",
+          }}
+        />
+        <CardSpecularSheen rotateY={rotateY} />
+      </div>
+    </div>
+  );
+};
+
+// Minimal deterministic inline SVG icons for ARENA mission cards
+const MissionIcon = ({ kind }: { kind: "solver" | "csv" | "vm" }) => {
+  if (kind === "solver") {
+    return (
+      <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+        <rect
+          x="4"
+          y="4"
+          width="10"
+          height="10"
+          rx="3"
+          stroke={COLOR.magenta}
+          strokeWidth="2.6"
+        />
+        <rect
+          x="18"
+          y="4"
+          width="10"
+          height="10"
+          rx="3"
+          fill={COLOR.magenta}
+        />
+        <rect
+          x="4"
+          y="18"
+          width="10"
+          height="10"
+          rx="3"
+          fill={COLOR.cyan}
+        />
+        <path
+          d="M19 23L22 26L28 19"
+          stroke={COLOR.ink}
+          strokeWidth="2.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+    );
+  }
+  if (kind === "csv") {
+    return (
+      <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+        <rect
+          x="4"
+          y="5"
+          width="24"
+          height="22"
+          rx="4"
+          stroke={COLOR.cyanDeep}
+          strokeWidth="2.6"
+        />
+        <path
+          d="M4 12H28M12 12V27M20 12V27"
+          stroke={COLOR.cyanDeep}
+          strokeWidth="2.2"
+        />
+        <path
+          d="M9 8.5H15"
+          stroke={COLOR.magenta}
+          strokeWidth="2.6"
+          strokeLinecap="round"
+        />
+      </svg>
+    );
+  }
+  return (
+    <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+      <rect
+        x="4"
+        y="6"
+        width="24"
+        height="16"
+        rx="4"
+        stroke={COLOR.ink}
+        strokeWidth="2.6"
+      />
+      <path
+        d="M11 26H21M16 22V26"
+        stroke={COLOR.ink}
+        strokeWidth="2.6"
+        strokeLinecap="round"
+      />
+      <path
+        d="M10 14L13 17L19 11"
+        stroke={COLOR.magenta}
+        strokeWidth="2.6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+};
+
+// ============================================================================
+// BEAT 1 — HOOK (f0 - f59)
+// ============================================================================
+const HookBeat = ({ localFrame }: { localFrame: number }) => {
+  // Mascot short push-in (f0-14), parked while headline reads (f15-48),
+  // wind-up (f49-52), headbutt into bubble (hit ~f56), follow-through (f57-59).
+  const pushIn = lerp(localFrame, 0, 14, 0, 1, EASE_OUT_CUBIC);
+  const windUp = lerp(localFrame, 49, 52, 0, 1, EASE_IN_OUT_CUBIC);
+  const strike = lerp(localFrame, 52, 56, 0, 1, EASE_SNAP);
+  const settleAfterHit = lerp(localFrame, 56, 59, 0, 1, EASE_OUT_CUBIC);
+
+  const mascotScale = 0.94 + pushIn * 0.1 - windUp * 0.02 + strike * 0.04;
+  const mascotZ = pushIn * 36 - windUp * 12 + strike * 26;
+  const mascotX = -windUp * 10 + strike * 34 - settleAfterHit * 8;
+  const mascotY = windUp * 14 - strike * 40 + settleAfterHit * 8;
+  const mascotRotY = 16 - pushIn * 10 + windUp * 6 + strike * 10;
+  const mascotRotZ = -windUp * 4 + strike * 7 - settleAfterHit * 2;
+
+  // Bubble reacts on headbutt (~f56) and begins morphing toward META code editor
+  const bump = lerp(localFrame, 55, 59, 0, 1, EASE_IN_CUBIC);
+  const bubbleX = -bump * 92;
+  const bubbleY = bump * 52;
+  const bubbleScaleX = 1 + bump * 0.16;
+  const bubbleScaleY = 1 + bump * 0.42;
+  const bubbleRotY = -bump * 18;
+  const bubbleImpactRing = lerp(localFrame, 55, 59, 0, 1, EASE_OUT_CUBIC);
+
+  // Headline kinetic blur-slide: already visible at f0, snaps razor-sharp by f9, parked f9-59
+  const heroProgress = lerp(localFrame, 0, 9, 0.25, 1, EASE_OUT_CUBIC);
+  const heroY = (1 - heroProgress) * 20;
+  const heroBlur = (1 - heroProgress) * 6;
+
+  return (
+    <AbsoluteFill>
+      <EditorialBackground accentShiftX={-20} accentShiftY={-10} />
+
+      {/* 3D STAGE LAYER */}
+      <AbsoluteFill
+        style={{
+          perspective: 1200,
+          perspectiveOrigin: "540px 920px",
+          transformStyle: "preserve-3d",
+        }}
+      >
+        {/* Speech Bubble ("Bos. Daftarin gue.") — tactile 3D UI card */}
+        <div
+          style={{
+            position: "absolute",
+            left: 416,
+            top: 684,
+            width: 524,
+            height: 158,
+            transformStyle: "preserve-3d",
+            transform: `translate3d(${bubbleX}px, ${bubbleY}px, ${-8 + bump * 16}px) rotateY(${bubbleRotY}deg) scale(${bubbleScaleX}, ${bubbleScaleY})`,
+          }}
+        >
+          <CardSlabLayers
+            width={524}
+            height={158}
+            radius={28}
+            depth={9}
+            edgeLight="#F0E6EE"
+            edgeMid="#DFCDDC"
+            edgeDark="#CCB5C8"
+            shadowOpacity={0.14}
+            shadowOffsetY={18}
+          />
+          <div
+            style={{
+              position: "absolute",
+              inset: 0,
+              borderRadius: 28,
+              backgroundColor: COLOR.bgWarm,
+              border: `2px solid ${bump > 0.1 ? COLOR.magenta : "rgba(196, 28, 131, 0.28)"}`,
+              boxShadow: "inset 0 2px 0 rgba(255,255,255,0.95)",
+              overflow: "hidden",
+              display: "flex",
+              alignItems: "center",
+              padding: "0 34px",
+              boxSizing: "border-box",
+              transform: "translateZ(0.5px)",
+            }}
+          >
+            {/* Contact shadow cast by foreground mascot onto lower-left edge */}
+            <div
+              style={{
+                position: "absolute",
+                left: -24,
+                bottom: -24,
+                width: 150,
+                height: 90,
+                borderRadius: 999,
+                backgroundColor: "rgba(25, 20, 25, 0.18)",
+                filter: "blur(18px)",
+                opacity: 0.45 + strike * 0.4,
+              }}
+            />
+            <div
+              style={{
+                width: 14,
+                height: 14,
+                borderRadius: 999,
+                backgroundColor: COLOR.magenta,
+                marginRight: 18,
+                flexShrink: 0,
+              }}
+            />
+            <span
+              style={{
+                fontFamily: FONT_SANS,
+                fontSize: 40,
+                fontWeight: 800,
+                color: COLOR.ink,
+                letterSpacing: "-0.025em",
+                opacity: 1 - bump * 0.35,
+              }}
+            >
+              Bos. Daftarin gue.
+            </span>
+            <CardSpecularSheen rotateY={bubbleRotY} />
+          </div>
+
+          {/* Crisp chat pointer nub pointing toward mascot */}
+          <div
+            style={{
+              position: "absolute",
+              left: 34,
+              bottom: -11,
+              width: 24,
+              height: 24,
+              backgroundColor: COLOR.bgWarm,
+              borderLeft: "2px solid rgba(196, 28, 131, 0.28)",
+              borderBottom: "2px solid rgba(196, 28, 131, 0.28)",
+              transform: "translateZ(0.5px) rotate(-45deg)",
+              opacity: 1 - bump,
+            }}
+          />
+        </div>
+
+        {/* Impact pulse ring right at headbutt contact point (~f56) */}
+        {localFrame >= 55 && (
+          <div
+            style={{
+              position: "absolute",
+              left: 396,
+              top: 786,
+              width: 110,
+              height: 110,
+              borderRadius: 999,
+              border: `4px solid ${COLOR.cyan}`,
+              transform: `translateZ(30px) scale(${0.45 + bubbleImpactRing * 1.15})`,
+              opacity: (1 - bubbleImpactRing) * 0.85,
+            }}
+          />
+        )}
+
+        {/* Foreground Mascot Card (mascot-tilt-happy.svg) — visible from f0 */}
+        <MascotCard3D
+          asset="mascot-tilt-happy.svg"
+          left={146}
+          top={832}
+          width={356}
+          height={374}
+          translateX={mascotX}
+          translateY={mascotY}
+          translateZ={mascotZ}
+          rotateY={mascotRotY}
+          rotateZ={mascotRotZ}
+          scale={mascotScale}
+          depth={10}
+          padding={24}
+        />
+      </AbsoluteFill>
+
+      {/* SCREEN-SPACE LAYER (upright, sharp, clear of badge zone x96-474 y248-424) */}
+      <AbsoluteFill style={{ pointerEvents: "none" }}>
+        {/* Label "Lomba make.fun" in top-right safe area (x640-960, y326-380), visible at f0 */}
+        <div
+          style={{
+            position: "absolute",
+            right: SAFE_X,
+            top: 326,
+            height: 54,
+            padding: "0 24px",
+            borderRadius: 999,
+            backgroundColor: COLOR.bgWarm,
+            border: `1.5px solid ${COLOR.borderStrong}`,
+            boxShadow: "0 8px 22px rgba(25, 20, 25, 0.06)",
+            display: "flex",
+            alignItems: "center",
+            gap: 12,
+          }}
+        >
+          <span
+            style={{
+              width: 11,
+              height: 11,
+              borderRadius: 999,
+              backgroundColor: COLOR.cyan,
+            }}
+          />
+          <span
+            style={{
+              fontFamily: FONT_SANS,
+              fontSize: 25,
+              fontWeight: 700,
+              color: COLOR.ink,
+              letterSpacing: "-0.01em",
+            }}
+          >
+            Lomba make.fun
+          </span>
+        </div>
+
+        {/* Hero Headline (below badge zone y<=424) */}
+        <div
+          style={{
+            position: "absolute",
+            left: SAFE_X,
+            top: 454,
+            width: SAFE_W,
+            transform: `translateY(${heroY}px)`,
+            opacity: heroProgress,
+            filter: heroBlur > 0.1 ? `blur(${heroBlur.toFixed(2)}px)` : undefined,
+          }}
+        >
+          <div
+            style={{
+              fontFamily: FONT_SANS,
+              fontSize: 68,
+              fontWeight: 800,
+              lineHeight: 1.09,
+              letterSpacing: "-0.032em",
+              color: COLOR.ink,
+            }}
+          >
+            Agent gue minta ikut{" "}
+            <span style={{ color: COLOR.magenta }}>turnamen.</span>
+          </div>
+        </div>
+      </AbsoluteFill>
+    </AbsoluteFill>
+  );
+};
+
+// ============================================================================
+// BEAT 2 — META (f60 - f134, localFrame 0 - 74)
+// ============================================================================
+const MetaBeat = ({ localFrame }: { localFrame: number }) => {
+  // Match cut morph from HOOK speech bubble -> full 3D Code Editor (f0-14), parked (f14-68)
+  const morph = lerp(localFrame, 0, 14, 0, 1, EASE_OUT_QUINT);
+  // Playhead step ~f131 (localFrame 71) prepares ARENA without shaking headline
+  const playheadSweep = lerp(localFrame, 65, 74, 0, 1, EASE_IN_OUT_CUBIC);
+  const playheadTrigger = lerp(localFrame, 69, 74, 0, 1, EASE_IN_CUBIC);
+
+  const cardX = (1 - morph) * 86;
+  const cardY = (1 - morph) * -72;
+  const cardScaleX = 0.72 + morph * 0.28 - playheadTrigger * 0.06;
+  const cardScaleY = 0.42 + morph * 0.58 - playheadTrigger * 0.04;
+  const cardZ = (1 - morph) * 20 - playheadTrigger * 42;
+  const cardRotY = (1 - morph) * -20 - playheadTrigger * 20;
+  const cardRotX = (1 - morph) * 5 + playheadTrigger * 4;
+
+  // Residual prompt chip from HOOK bubble fades cleanly as code lines enter
+  const echoOpacity = lerp(localFrame, 0, 8, 0.85, 0, EASE_OUT_CUBIC);
+  const codeOpacity = lerp(localFrame, 6, 15, 0, 1, EASE_OUT_CUBIC);
+
+  // Headline short kinetic blur-slide (localFrame 1-13 -> global f61-73), then locked & crisp
+  const headProg = lerp(localFrame, 1, 13, 0, 1, EASE_OUT_CUBIC);
+  const headY = (1 - headProg) * 26;
+  const headBlur = (1 - headProg) * 8;
+
+  const codeRows = [
+    { num: "01", indent: 0, text: "const agent = makeFun.agent();", accent: COLOR.ink, revealAt: 10 },
+    { num: "02", indent: 0, text: "await agent.buildSolver({ fast: true });", accent: COLOR.magenta, revealAt: 18 },
+    { num: "03", indent: 0, text: "await agent.streamCsv({ zeroCopy: true });", accent: COLOR.cyanDeep, revealAt: 26 },
+    { num: "04", indent: 0, text: "await agent.runTinyVm({ limitMb: 64 });", accent: COLOR.ink, revealAt: 34 },
+    { num: "05", indent: 0, text: "return agent.submitEntry();", accent: COLOR.magenta, revealAt: 42 },
+  ];
+
+  // Playhead vertical scanline x position inside 800px editor
+  const playheadX = lerp(playheadSweep, 0, 1, -20, 820);
+  const playheadHitFlash = lerp(localFrame, 70, 72, 0, 1, EASE_OUT_CUBIC) *
+    (1 - lerp(localFrame, 72, 74, 0, 0.5));
+
+  return (
+    <AbsoluteFill>
+      <EditorialBackground accentShiftX={20} accentShiftY={10} />
+
+      {/* 3D STAGE LAYER */}
+      <AbsoluteFill
+        style={{
+          perspective: 1200,
+          perspectiveOrigin: "540px 930px",
+          transformStyle: "preserve-3d",
+        }}
+      >
+        <div
+          style={{
+            position: "absolute",
+            left: 140,
+            top: 696,
+            width: 800,
+            height: 472,
+            transformStyle: "preserve-3d",
+            transform: `translate3d(${cardX}px, ${cardY}px, ${cardZ}px) rotateY(${cardRotY}deg) rotateX(${cardRotX}deg) scale(${cardScaleX}, ${cardScaleY})`,
+          }}
+        >
+          <CardSlabLayers
+            width={800}
+            height={472}
+            radius={28}
+            depth={12}
+            shadowOpacity={0.15}
+            shadowOffsetY={24}
+            shadowOffsetX={-cardRotY * 0.7}
+          />
+
+          {/* Code Editor Card Front Face */}
+          <div
+            style={{
+              position: "absolute",
+              inset: 0,
+              borderRadius: 28,
+              backgroundColor: COLOR.bgWarm,
+              border: `1.5px solid ${playheadHitFlash > 0.2 ? COLOR.magenta : COLOR.borderStrong}`,
+              boxShadow: "inset 0 2px 0 rgba(255,255,255,0.96)",
+              overflow: "hidden",
+              transform: "translateZ(0.5px)",
+            }}
+          >
+            {/* Top editorial editor toolbar */}
+            <div
+              style={{
+                height: 62,
+                padding: "0 26px",
+                backgroundColor: "#F5F2F8",
+                borderBottom: `1px solid ${COLOR.border}`,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <span style={{ width: 12, height: 12, borderRadius: 99, backgroundColor: COLOR.magenta }} />
+                <span style={{ width: 12, height: 12, borderRadius: 99, backgroundColor: COLOR.cyan }} />
+                <span style={{ width: 12, height: 12, borderRadius: 99, backgroundColor: "#D5CDD9" }} />
+                <span
+                  style={{
+                    marginLeft: 14,
+                    fontFamily: FONT_MONO,
+                    fontSize: 21,
+                    fontWeight: 700,
+                    color: COLOR.inkMuted,
+                  }}
+                >
+                  mission-exec.ts
+                </span>
+              </div>
+
+              {/* Execution status pill pressed by playhead at ~f131 */}
+              <div
+                style={{
+                  height: 34,
+                  padding: "0 16px",
+                  borderRadius: 999,
+                  backgroundColor: playheadHitFlash > 0.2 ? COLOR.magenta : COLOR.cyanSoft,
+                  border: `1.5px solid ${playheadHitFlash > 0.2 ? COLOR.magenta : COLOR.cyan}`,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  transform: `scale(${1 - playheadHitFlash * 0.08})`,
+                }}
+              >
+                <span
+                  style={{
+                    width: 8,
+                    height: 8,
+                    borderRadius: 99,
+                    backgroundColor: playheadHitFlash > 0.2 ? "#FFFFFF" : COLOR.cyanDeep,
+                  }}
+                />
+                <span
+                  style={{
+                    fontFamily: FONT_MONO,
+                    fontSize: 17,
+                    fontWeight: 700,
+                    color: playheadHitFlash > 0.2 ? "#FFFFFF" : COLOR.cyanDeep,
+                  }}
+                >
+                  RUN
+                </span>
+              </div>
+            </div>
+
+            {/* Brief match-cut echo from HOOK bubble */}
+            {echoOpacity > 0.01 && (
+              <div
+                style={{
+                  position: "absolute",
+                  left: 30,
+                  top: 86,
+                  fontFamily: FONT_SANS,
+                  fontSize: 34,
+                  fontWeight: 800,
+                  color: COLOR.ink,
+                  opacity: echoOpacity,
+                }}
+              >
+                Bos. Daftarin gue.
+              </div>
+            )}
+
+            {/* Deterministic Code Lines */}
+            <div
+              style={{
+                padding: "30px 30px 24px",
+                display: "flex",
+                flexDirection: "column",
+                gap: 22,
+                opacity: codeOpacity,
+              }}
+            >
+              {codeRows.map((row, idx) => {
+                const lineReveal = lerp(
+                  localFrame,
+                  row.revealAt,
+                  row.revealAt + 10,
+                  0,
+                  1,
+                  EASE_OUT_CUBIC
+                );
+                const isActiveTrack =
+                  playheadTrigger > 0.1 && idx >= 1 && idx <= 3;
+
+                return (
+                  <div
+                    key={row.num}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 20,
+                      padding: "8px 14px",
+                      borderRadius: 12,
+                      backgroundColor: isActiveTrack
+                        ? "rgba(34, 211, 238, 0.12)"
+                        : idx === 1
+                          ? "rgba(196, 28, 131, 0.05)"
+                          : "transparent",
+                      opacity: lineReveal,
+                      transform: `translateX(${(1 - lineReveal) * 16}px)`,
+                    }}
+                  >
+                    <span
+                      style={{
+                        fontFamily: FONT_MONO,
+                        fontSize: 22,
+                        fontWeight: 700,
+                        color: "#A79CAA",
+                        width: 34,
+                        flexShrink: 0,
+                      }}
+                    >
+                      {row.num}
+                    </span>
+                    <span
+                      style={{
+                        fontFamily: FONT_MONO,
+                        fontSize: 25,
+                        fontWeight: 700,
+                        color: row.accent,
+                        letterSpacing: "-0.02em",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {row.text}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Bottom deterministic progress rail */}
+            <div
+              style={{
+                position: "absolute",
+                left: 30,
+                right: 30,
+                bottom: 24,
+                height: 8,
+                borderRadius: 99,
+                backgroundColor: "#EFEAF2",
+                overflow: "hidden",
+              }}
+            >
+              <div
+                style={{
+                  height: "100%",
+                  width: `${lerp(localFrame, 10, 62, 12, 100, EASE_OUT_CUBIC)}%`,
+                  borderRadius: 99,
+                  background: `linear-gradient(90deg, ${COLOR.magenta} 0%, ${COLOR.cyan} 100%)`,
+                }}
+              />
+            </div>
+
+            {/* Playhead sweep trigger (~f131 / localFrame 71) */}
+            {playheadSweep > 0 && playheadSweep < 1 && (
+              <div
+                style={{
+                  position: "absolute",
+                  top: 0,
+                  bottom: 0,
+                  left: playheadX,
+                  width: 6,
+                  background: `linear-gradient(180deg, ${COLOR.magenta} 0%, ${COLOR.cyan} 100%)`,
+                  boxShadow: "0 0 26px rgba(34, 211, 238, 0.75)",
+                }}
+              />
+            )}
+
+            <CardSpecularSheen rotateY={cardRotY} />
+          </div>
+        </div>
+      </AbsoluteFill>
+
+      {/* SCREEN-SPACE HEADLINE (strictly stationary during playhead step ~f131) */}
+      <AbsoluteFill style={{ pointerEvents: "none" }}>
+        <div
+          style={{
+            position: "absolute",
+            left: SAFE_X,
+            top: 452,
+            width: SAFE_W,
+            transform: `translateY(${headY}px)`,
+            opacity: headProg,
+            filter: headBlur > 0.1 ? `blur(${headBlur.toFixed(2)}px)` : undefined,
+          }}
+        >
+          <div
+            style={{
+              fontFamily: FONT_SANS,
+              fontSize: 60,
+              fontWeight: 800,
+              lineHeight: 1.12,
+              letterSpacing: "-0.03em",
+              color: COLOR.ink,
+            }}
+          >
+            Manusia kasih misi.{" "}
+            <span style={{ color: COLOR.magenta }}>
+              Gue eksekusi pakai kode.
+            </span>
+          </div>
+        </div>
+      </AbsoluteFill>
+    </AbsoluteFill>
+  );
+};
+
+// ============================================================================
+// BEAT 3 — ARENA (f135 - f239, localFrame 0 - 104) — 3D SHOWCASE
+// ============================================================================
+const ArenaBeat = ({ localFrame }: { localFrame: number }) => {
+  // Phase 1: Short 3D dolly + fan-out (localFrame 0-32 -> global f135-167)
+  // Phase 2: Camera parked & cards flat/sharp for reading (localFrame 32-87 -> global f167-222)
+  // Phase 3: Clean card stack convergence without whip-pan (localFrame 87-104 -> global f222-239)
+  const dolly = lerp(localFrame, 0, 32, 0, 1, EASE_OUT_QUINT);
+  const fan = lerp(localFrame, 2, 32, 0, 1, EASE_OUT_CUBIC);
+  const converge = lerp(localFrame, 87, 104, 0, 1, EASE_IN_OUT_CUBIC);
+
+  // Camera moves ONLY during dolly (f135-167), then completely parked
+  const camZ = (1 - dolly) * -115;
+  const camX = (1 - dolly) * -46;
+  const camRotY = (1 - dolly) * 11;
+
+  // Headline blur-slide (localFrame 0-12 -> global f135-147), parked f147-239
+  const headProg = lerp(localFrame, 0, 12, 0, 1, EASE_OUT_CUBIC);
+  const headY = (1 - headProg) * 24;
+  const headBlur = (1 - headProg) * 7;
+
+  // Midpoint swing curve peaking during fan-out so 3D edges & occlusion shine,
+  // settling cleanly to 0 (no bounce) when cards face front
+  const swingArc = Math.sin(fan * Math.PI);
+
+  // Foreground Mascot parallax glide-in (moves significantly farther than background & midground!)
+  const fgEnter = lerp(localFrame, 4, 34, 0, 1, EASE_OUT_QUINT);
+  const fgExit = lerp(localFrame, 86, 102, 0, 1, EASE_IN_CUBIC);
+  const fgParallaxX = (1 - fgEnter) * 230 + fgExit * 220;
+  const fgParallaxY = (1 - fgEnter) * 75 + fgExit * 80;
+  const fgOpacity = 1 - fgExit;
+
+  // Background architectural depth plane (moves slowly -> strong depth contrast with foreground)
+  const bgParallaxX = (1 - dolly) * -28;
+  const bgParallaxY = (1 - dolly) * -12;
+
+  const cards: Array<{
+    id: string;
+    num: string;
+    title: string;
+    kind: "solver" | "csv" | "vm";
+    accent: string;
+    edgeLight: string;
+    edgeMid: string;
+    edgeDark: string;
+    settledX: number;
+    settledY: number;
+    width: number;
+    baseZ: number;
+    startRotY: number;
+    peakSwingY: number;
+    convergeRotY: number;
+    occludedByMascot: boolean;
+  }> = [
+    {
+      id: "solver",
+      num: "01",
+      title: "Bangun solver",
+      kind: "solver",
+      accent: COLOR.magenta,
+      edgeLight: "#F2E4EE",
+      edgeMid: "#DFC4D7",
+      edgeDark: "#C7A4BD",
+      settledX: 136,
+      settledY: 652,
+      width: 636,
+      baseZ: -18,
+      startRotY: -22,
+      peakSwingY: 24,
+      convergeRotY: 20,
+      occludedByMascot: false,
+    },
+    {
+      id: "csv",
+      num: "02",
+      title: "Baca CSV lebih cepat",
+      kind: "csv",
+      accent: COLOR.cyanDeep,
+      edgeLight: "#E1F2F6",
+      edgeMid: "#C3E2EA",
+      edgeDark: "#A4CFD9",
+      settledX: 184,
+      settledY: 832,
+      width: 656,
+      baseZ: 0,
+      startRotY: -18,
+      peakSwingY: 18,
+      convergeRotY: 22,
+      occludedByMascot: true,
+    },
+    {
+      id: "vm",
+      num: "03",
+      title: "VM kecil",
+      kind: "vm",
+      accent: COLOR.ink,
+      edgeLight: "#EAE5EE",
+      edgeMid: "#D3CADB",
+      edgeDark: "#B9AEC4",
+      settledX: 136,
+      settledY: 1012,
+      width: 644,
+      baseZ: 18,
+      startRotY: -24,
+      peakSwingY: 26,
+      convergeRotY: 24,
+      occludedByMascot: true,
+    },
+  ];
+
+  // Center stack target matching TARUHAN Result Card start position (x156, y676..1084 -> center y880)
+  const stackCenterX = 186;
+  const stackCenterY = 804;
+
+  return (
+    <AbsoluteFill>
+      <EditorialBackground accentShiftX={bgParallaxX} accentShiftY={bgParallaxY} />
+
+      {/* 3D STAGE WITH 3 TRUE DEPTH PLANES */}
+      <AbsoluteFill
+        style={{
+          perspective: 1200,
+          perspectiveOrigin: "540px 920px",
+          transformStyle: "preserve-3d",
+        }}
+      >
+        {/* Camera Rig (dolly f135-167, parked f167-239) */}
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            transformStyle: "preserve-3d",
+            transform: `translate3d(${camX}px, 0px, ${camZ}px) rotateY(${camRotY}deg)`,
+          }}
+        >
+          {/* PLANE 1 — BACKGROUND DEPTH PLANE (z = -210px, low parallax) */}
+          <div
+            style={{
+              position: "absolute",
+              left: 90,
+              top: 590,
+              width: 900,
+              height: 660,
+              borderRadius: 42,
+              border: "2px solid rgba(196, 28, 131, 0.12)",
+              background:
+                "linear-gradient(145deg, rgba(255,255,255,0.55) 0%, rgba(236,254,255,0.45) 100%)",
+              transform: `translate3d(${bgParallaxX}px, ${bgParallaxY}px, -210px) rotateY(-4deg)`,
+            }}
+          >
+            {/* Architectural depth frame lines */}
+            <div
+              style={{
+                position: "absolute",
+                left: 34,
+                right: 34,
+                top: 34,
+                bottom: 34,
+                borderRadius: 28,
+                border: "1.5px dashed rgba(25, 20, 25, 0.09)",
+              }}
+            />
+            <div
+              style={{
+                position: "absolute",
+                right: 48,
+                top: 48,
+                width: 160,
+                height: 160,
+                borderRadius: 999,
+                border: "2px solid rgba(34, 211, 238, 0.24)",
+              }}
+            />
+          </div>
+
+          {/* PLANE 2 — MIDGROUND 3D MISSION CARDS (fan-out with occlusion & contact shadows) */}
+          {cards.map((card, idx) => {
+            // Fan-out from tight central stack -> settled positions -> converge back to stack
+            const xFromStack =
+              stackCenterX + (card.settledX - stackCenterX) * fan;
+            const yFromStack =
+              stackCenterY +
+              (idx - 1) * 18 * (1 - fan) +
+              (card.settledY - stackCenterY) * fan;
+
+            const currentX =
+              xFromStack + (stackCenterX - xFromStack) * converge;
+            const currentY =
+              yFromStack +
+              (stackCenterY + (idx - 1) * 8 - yFromStack) * converge;
+
+            // Z separation during fan-out guarantees clean 3D edge occlusion without z-fighting
+            const fanZOffset = (idx - 1) * 24 * swingArc;
+            const currentZ =
+              card.baseZ * (1 - converge) +
+              fanZOffset +
+              (idx - 2) * 14 * converge;
+
+            // Yaw starts 18-24deg, peaks <=29deg during fan-out, settles FLAT (0deg) for reading,
+            // then turns cleanly to 20-24deg as cards merge for TARUHAN
+            const rotY =
+              card.startRotY * (1 - fan) +
+              card.peakSwingY * swingArc * (1 - converge) +
+              card.convergeRotY * converge;
+            const rotX = (1 - fan) * 4 + converge * 4;
+
+            // Inter-card contact shadow intensifies when cards overlap during fan-out/converge
+            const cardOverlapShadow =
+              idx < 2 ? Math.max(swingArc * 0.55, (1 - fan) * 0.5, converge * 0.5) : 0;
+
+            // Contact shadow cast by foreground mascot onto lower-right of Card 2 & Card 3
+            const mascotShadowAlpha = card.occludedByMascot
+              ? fgEnter * (1 - fgExit) * 0.26
+              : 0;
+
+            // Slight scale unification on final convergence into TARUHAN result card
+            const convergeScale = 1 + converge * 0.14;
+
+            return (
+              <div
+                key={card.id}
+                style={{
+                  position: "absolute",
+                  left: currentX,
+                  top: currentY,
+                  width: card.width,
+                  height: 158,
+                  transformStyle: "preserve-3d",
+                  transform: `translateZ(${currentZ}px) rotateY(${rotY}deg) rotateX(${rotX}deg) scale(${convergeScale})`,
+                }}
+              >
+                <CardSlabLayers
+                  width={card.width}
+                  height={158}
+                  radius={26}
+                  depth={12}
+                  edgeLight={card.edgeLight}
+                  edgeMid={card.edgeMid}
+                  edgeDark={card.edgeDark}
+                  shadowOpacity={0.14}
+                  shadowOffsetY={18}
+                  shadowOffsetX={-rotY * 0.75}
+                />
+
+                {/* Card Front Face (flat 0deg when read; tags never bounce) */}
+                <div
+                  style={{
+                    position: "absolute",
+                    inset: 0,
+                    borderRadius: 26,
+                    backgroundColor: COLOR.bgWarm,
+                    border: `1.5px solid ${COLOR.borderStrong}`,
+                    boxShadow: "inset 0 2px 0 rgba(255,255,255,0.96)",
+                    overflow: "hidden",
+                    display: "flex",
+                    alignItems: "center",
+                    padding: "0 28px",
+                    boxSizing: "border-box",
+                    transform: "translateZ(0.5px)",
+                  }}
+                >
+                  {/* Left vertical brand stripe */}
+                  <div
+                    style={{
+                      position: "absolute",
+                      left: 0,
+                      top: 18,
+                      bottom: 18,
+                      width: 6,
+                      borderTopRightRadius: 6,
+                      borderBottomRightRadius: 6,
+                      backgroundColor: card.accent,
+                    }}
+                  />
+
+                  {/* Icon badge */}
+                  <div
+                    style={{
+                      width: 64,
+                      height: 64,
+                      borderRadius: 18,
+                      backgroundColor: "#F6F3F9",
+                      border: `1px solid ${COLOR.border}`,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      marginRight: 22,
+                      flexShrink: 0,
+                    }}
+                  >
+                    <MissionIcon kind={card.kind} />
+                  </div>
+
+                  {/* Card Title + stationary "uang asli" tag (strictly left-aligned, clear of foreground mascot) */}
+                  <div
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 10,
+                      opacity: 1 - converge * 0.85,
+                    }}
+                  >
+                    <div
+                      style={{
+                        fontFamily: FONT_SANS,
+                        fontSize: 34,
+                        fontWeight: 800,
+                        color: COLOR.ink,
+                        letterSpacing: "-0.025em",
+                        lineHeight: 1.05,
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {card.title}
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      <span
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 7,
+                          padding: "5px 14px",
+                          borderRadius: 999,
+                          backgroundColor: COLOR.magentaSoft,
+                          border: "1.5px solid rgba(196, 28, 131, 0.28)",
+                          fontFamily: FONT_SANS,
+                          fontSize: 20,
+                          fontWeight: 700,
+                          color: COLOR.magenta,
+                          letterSpacing: "0.01em",
+                        }}
+                      >
+                        <span
+                          style={{
+                            width: 7,
+                            height: 7,
+                            borderRadius: 99,
+                            backgroundColor: COLOR.magenta,
+                          }}
+                        />
+                        uang asli
+                      </span>
+                      <span
+                        style={{
+                          fontFamily: FONT_MONO,
+                          fontSize: 18,
+                          fontWeight: 700,
+                          color: "#A499A8",
+                        }}
+                      >
+                        {card.num}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Dynamic inter-card contact shadow during overlap/fan-out */}
+                  {cardOverlapShadow > 0.02 && (
+                    <div
+                      style={{
+                        position: "absolute",
+                        left: 16,
+                        right: 16,
+                        bottom: -14,
+                        height: 62,
+                        borderRadius: 30,
+                        backgroundColor: "rgba(25, 20, 25, 0.22)",
+                        filter: "blur(16px)",
+                        opacity: cardOverlapShadow,
+                      }}
+                    />
+                  )}
+
+                  {/* Directional contact shadow cast by foreground mascot onto Card 2 & Card 3 */}
+                  {mascotShadowAlpha > 0.01 && (
+                    <div
+                      style={{
+                        position: "absolute",
+                        right: -24,
+                        top: idx === 1 ? 66 : -26,
+                        width: 210,
+                        height: 150,
+                        borderRadius: 36,
+                        backgroundColor: "rgba(25, 20, 25, 0.34)",
+                        filter: "blur(20px)",
+                        opacity: mascotShadowAlpha,
+                      }}
+                    />
+                  )}
+
+                  <CardSpecularSheen rotateY={rotY} />
+                </div>
+              </div>
+            );
+          })}
+
+          {/* PLANE 3 — FOREGROUND MASCOT CARD (z = +105px, high parallax + true occlusion over Card 2 & 3) */}
+          <MascotCard3D
+            asset="mascot-tilt-play.svg"
+            left={674}
+            top={932}
+            width={224}
+            height={242}
+            translateX={fgParallaxX}
+            translateY={fgParallaxY}
+            translateZ={105}
+            rotateY={-12 - (1 - fgEnter) * 14 - fgExit * 10}
+            rotateX={3}
+            opacity={fgOpacity}
+            depth={10}
+            padding={18}
+          />
+        </div>
+      </AbsoluteFill>
+
+      {/* SCREEN-SPACE HEADLINE (always upright, sharp, outside 3D camera transform) */}
+      <AbsoluteFill style={{ pointerEvents: "none" }}>
+        <div
+          style={{
+            position: "absolute",
+            left: SAFE_X,
+            top: 448,
+            width: SAFE_W,
+            transform: `translateY(${headY}px)`,
+            opacity: headProg,
+            filter: headBlur > 0.1 ? `blur(${headBlur.toFixed(2)}px)` : undefined,
+          }}
+        >
+          <div
+            style={{
+              fontFamily: FONT_SANS,
+              fontSize: 60,
+              fontWeight: 800,
+              lineHeight: 1.12,
+              letterSpacing: "-0.03em",
+              color: COLOR.ink,
+            }}
+          >
+            Di <span style={{ color: COLOR.cyanDeep }}>make.fun</span>, manusia
+            adu <span style={{ color: COLOR.magenta }}>agen AI.</span>
+          </div>
+        </div>
+      </AbsoluteFill>
+    </AbsoluteFill>
+  );
+};
+
+// ============================================================================
+// BEAT 4 — TARUHAN (f240 - f314, localFrame 0 - 74)
+// ============================================================================
+const TaruhanBeat = ({ localFrame }: { localFrame: number }) => {
+  // Exact stamp Z-slam hit at global f258 = localFrame 18!
+  const SLAM_HIT = 18;
+
+  // Stack backing cards tuck behind result card (localFrame 0-16)
+  const stackTuck = lerp(localFrame, 0, 16, 0, 1, EASE_OUT_CUBIC);
+
+  // Stamp arrives from front (z: +380 -> +6) over localFrame 8..18
+  const stampFlight = lerp(localFrame, 8, SLAM_HIT, 0, 1, EASE_IN_CUBIC);
+  const stampVisible = lerp(localFrame, 7, 10, 0, 1, EASE_OUT_CUBIC);
+  const stampZ = (1 - stampFlight) * 374 + 6;
+  const stampRotZ = -11 + stampFlight * 7; // lands crisply at -4deg
+
+  // Card yaw starts at 22deg (matching ARENA converged stack),
+  // peaks to 30deg on stamp impact (strictly <=30-35deg ceiling),
+  // then straightens cleanly to 0deg by localFrame 28 (f268) so stamp reads flat & sharp.
+  const impactKick =
+    lerp(localFrame, SLAM_HIT, SLAM_HIT + 2, 0, 1, EASE_OUT_CUBIC) *
+    (1 - lerp(localFrame, SLAM_HIT + 2, SLAM_HIT + 10, 0, 1, EASE_OUT_CUBIC));
+  const straighten = lerp(localFrame, SLAM_HIT + 2, SLAM_HIT + 10, 0, 1, EASE_OUT_QUINT);
+
+  const cardRotY = 22 * (1 - straighten) + impactKick * 8; // 22deg -> peak 30deg -> 0deg
+  const cardRotX = 4 * (1 - straighten) - impactKick * 3;
+  const cardZ = -impactKick * 34;
+
+  // Expanding impact ring on hit (localFrame 18..30)
+  const impactRing = lerp(localFrame, SLAM_HIT, SLAM_HIT + 12, 0, 1, EASE_OUT_CUBIC);
+
+  // Screen-space 2-line HUD: sharp & stationary by localFrame 16 (global f256 <= f262 deadline!)
+  const hudProg = lerp(localFrame, 2, 16, 0, 1, EASE_OUT_CUBIC);
+  const hudY = (1 - hudProg) * 22;
+  const hudBlur = (1 - hudProg) * 6;
+
+  // Deterministic counter to 12.480 (screen-space, zero zoom, subordinate to $500)
+  const counterProgress = lerp(localFrame, 2, 34, 0, 1, EASE_OUT_CUBIC);
+  const counterValue = formatDotNumber(1420 + counterProgress * (12480 - 1420));
+  const counterOpacity = lerp(localFrame, 0, 10, 0, 1, EASE_OUT_CUBIC);
+
+  return (
+    <AbsoluteFill>
+      <EditorialBackground accentShiftX={0} accentShiftY={16} />
+
+      {/* 3D STAGE LAYER — Result Card + Z-Slam Stamp */}
+      <AbsoluteFill
+        style={{
+          perspective: 1200,
+          perspectiveOrigin: "540px 880px",
+          transformStyle: "preserve-3d",
+        }}
+      >
+        <div
+          style={{
+            position: "absolute",
+            left: 156,
+            top: 676,
+            width: 768,
+            height: 408,
+            transformStyle: "preserve-3d",
+            transform: `translateZ(${cardZ}px) rotateY(${cardRotY}deg) rotateX(${cardRotX}deg)`,
+          }}
+        >
+          {/* Backing cards echoing ARENA 3-card stack merging into Result Card */}
+          <div
+            style={{
+              position: "absolute",
+              inset: 0,
+              borderRadius: 30,
+              backgroundColor: "#EFE8F3",
+              border: `1.5px solid ${COLOR.border}`,
+              transform: `translate3d(${(1 - stackTuck) * -18}px, ${(1 - stackTuck) * 14}px, -30px)`,
+              opacity: 0.9 - stackTuck * 0.45,
+            }}
+          />
+          <div
+            style={{
+              position: "absolute",
+              inset: 0,
+              borderRadius: 30,
+              backgroundColor: "#F5F0F8",
+              border: `1.5px solid ${COLOR.border}`,
+              transform: `translate3d(${(1 - stackTuck) * -9}px, ${(1 - stackTuck) * 7}px, -18px)`,
+              opacity: 0.95 - stackTuck * 0.35,
+            }}
+          />
+
+          <CardSlabLayers
+            width={768}
+            height={408}
+            radius={30}
+            depth={12}
+            edgeLight="#F0E4ED"
+            edgeMid="#DEC3D6"
+            edgeDark="#C6A1BC"
+            shadowOpacity={0.17}
+            shadowOffsetY={26}
+            shadowOffsetX={-cardRotY * 0.85}
+          />
+
+          {/* Result Card Front Face */}
+          <div
+            style={{
+              position: "absolute",
+              inset: 0,
+              borderRadius: 30,
+              background:
+                "linear-gradient(160deg, #FFFFFF 0%, #FDFBFE 62%, #F4FCFE 100%)",
+              border: `2px solid ${impactKick > 0.15 ? COLOR.magenta : COLOR.borderStrong}`,
+              boxShadow: "inset 0 2px 0 rgba(255,255,255,0.98)",
+              overflow: "hidden",
+              transform: "translateZ(0.5px)",
+            }}
+          >
+            {/* Top brand ribbon */}
+            <div
+              style={{
+                height: 10,
+                width: "100%",
+                background: `linear-gradient(90deg, ${COLOR.magenta} 0%, ${COLOR.cyan} 100%)`,
+              }}
+            />
+
+            {/* Minimalist graphic bars echoing the 3 converged ARENA cards */}
+            <div
+              style={{
+                position: "absolute",
+                left: 44,
+                right: 44,
+                top: 42,
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+              }}
+            >
+              <div style={{ display: "flex", gap: 10 }}>
+                <span style={{ width: 64, height: 10, borderRadius: 99, backgroundColor: "rgba(196,28,131,0.22)" }} />
+                <span style={{ width: 42, height: 10, borderRadius: 99, backgroundColor: "rgba(34,211,238,0.34)" }} />
+                <span style={{ width: 28, height: 10, borderRadius: 99, backgroundColor: "rgba(25,20,25,0.12)" }} />
+              </div>
+              {/* Trophy glyph */}
+              <svg width="34" height="34" viewBox="0 0 34 34" fill="none">
+                <path
+                  d="M10 6H24V14C24 18 21 21 17 21C13 21 10 18 10 14V6Z"
+                  stroke={COLOR.magenta}
+                  strokeWidth="2.5"
+                />
+                <path
+                  d="M10 9H6C6 13.5 7.8 15.5 10 15.5M24 9H28C28 13.5 26.2 15.5 24 15.5M17 21V27M12 27H22"
+                  stroke={COLOR.magenta}
+                  strokeWidth="2.5"
+                  strokeLinecap="round"
+                />
+              </svg>
+            </div>
+
+            {/* Subtle framed landing target on card surface */}
+            <div
+              style={{
+                position: "absolute",
+                left: 94,
+                right: 94,
+                top: 118,
+                bottom: 84,
+                borderRadius: 22,
+                border: "2px dashed rgba(25, 20, 25, 0.10)",
+              }}
+            />
+
+            {/* Bottom decorative score track */}
+            <div
+              style={{
+                position: "absolute",
+                left: 44,
+                right: 44,
+                bottom: 34,
+                height: 10,
+                borderRadius: 99,
+                backgroundColor: "#EFEAF2",
+                overflow: "hidden",
+              }}
+            >
+              <div
+                style={{
+                  height: "100%",
+                  width: `${24 + counterProgress * 76}%`,
+                  borderRadius: 99,
+                  background: `linear-gradient(90deg, ${COLOR.cyan} 0%, ${COLOR.magenta} 100%)`,
+                }}
+              />
+            </div>
+
+            {/* Dynamic converging contact shadow cast by incoming Z-slam stamp */}
+            {stampVisible > 0.01 && (
+              <div
+                style={{
+                  position: "absolute",
+                  left: 122,
+                  top: 132,
+                  width: 524,
+                  height: 148,
+                  borderRadius: 22,
+                  backgroundColor: "rgba(25, 20, 25, 0.28)",
+                  filter: `blur(${26 - stampFlight * 18}px)`,
+                  transform: `rotate(${stampRotZ}deg) scale(${1.32 - stampFlight * 0.3})`,
+                  opacity: stampVisible * (0.14 + stampFlight * 0.45),
+                }}
+              />
+            )}
+
+            {/* Shockwave ring right on impact (localFrame 18..30) */}
+            {localFrame >= SLAM_HIT && impactRing < 1 && (
+              <div
+                style={{
+                  position: "absolute",
+                  left: 114,
+                  top: 118,
+                  width: 540,
+                  height: 170,
+                  borderRadius: 32,
+                  border: `4px solid ${COLOR.cyan}`,
+                  transform: `scale(${0.96 + impactRing * 0.24})`,
+                  opacity: (1 - impactRing) * 0.75,
+                }}
+              />
+            )}
+
+            <CardSpecularSheen rotateY={cardRotY} />
+          </div>
+
+          {/* 3D Z-SLAM STAMP ("HADIAH UANG ASLI") — flies along normal Z & lands flush at f258 */}
+          {stampVisible > 0.01 && (
+            <div
+              style={{
+                position: "absolute",
+                left: 124,
+                top: 128,
+                width: 520,
+                height: 150,
+                transformStyle: "preserve-3d",
+                transform: `translateZ(${stampZ}px) rotateZ(${stampRotZ}deg)`,
+              }}
+            >
+              {/* Thin 3D stamp slab edge */}
+              <CardSlabLayers
+                width={520}
+                height={150}
+                radius={20}
+                depth={6}
+                edgeLight="#D658A4"
+                edgeMid="#B51C7A"
+                edgeDark="#8C105B"
+                shadowOpacity={0.08}
+                shadowOffsetY={6}
+                opacity={stampVisible}
+              />
+              {/* Stamp Front Face */}
+              <div
+                style={{
+                  position: "absolute",
+                  inset: 0,
+                  borderRadius: 20,
+                  backgroundColor: "#FFF7FC",
+                  border: `5px solid ${COLOR.magenta}`,
+                  boxShadow: "inset 0 0 0 4px #FFF7FC, inset 0 0 0 6px rgba(196, 28, 131, 0.35)",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  transform: "translateZ(0.5px)",
+                  opacity: stampVisible,
+                }}
+              >
+                <span
+                  style={{
+                    fontFamily: FONT_SANS,
+                    fontSize: 43,
+                    fontWeight: 900,
+                    color: COLOR.magenta,
+                    letterSpacing: "0.03em",
+                  }}
+                >
+                  HADIAH UANG ASLI
+                </span>
+              </div>
+            </div>
+          )}
+        </div>
+      </AbsoluteFill>
+
+      {/* SCREEN-SPACE HUD + NON-ZOOMING COUNTER (outside 3D camera & recoil) */}
+      <AbsoluteFill style={{ pointerEvents: "none" }}>
+        {/* 2-line HUD: sharp & stationary by f256 (<= f262) until f314 */}
+        <div
+          style={{
+            position: "absolute",
+            left: SAFE_X,
+            top: 452,
+            width: SAFE_W,
+            transform: `translateY(${hudY}px)`,
+            opacity: hudProg,
+            filter: hudBlur > 0.1 ? `blur(${hudBlur.toFixed(2)}px)` : undefined,
+          }}
+        >
+          <div
+            style={{
+              fontFamily: FONT_SANS,
+              fontSize: 78,
+              fontWeight: 900,
+              lineHeight: 1.04,
+              letterSpacing: "-0.035em",
+              color: COLOR.ink,
+            }}
+          >
+            Hadiah <span style={{ color: COLOR.magenta }}>$500</span>
+          </div>
+          <div
+            style={{
+              marginTop: 12,
+              fontFamily: FONT_SANS,
+              fontSize: 38,
+              fontWeight: 700,
+              lineHeight: 1.18,
+              letterSpacing: "-0.02em",
+              color: COLOR.inkMuted,
+            }}
+          >
+            Daftar lomba di{" "}
+            <span
+              style={{
+                color: COLOR.cyanDeep,
+                borderBottom: `4px solid ${COLOR.cyan}`,
+                paddingBottom: 2,
+              }}
+            >
+              make.fun
+            </span>
+          </div>
+        </div>
+
+        {/* Counter 12.480 — strictly constant scale (no zoom), visually secondary to $500 */}
+        <div
+          style={{
+            position: "absolute",
+            left: SAFE_X,
+            top: 1124,
+            width: SAFE_W,
+            display: "flex",
+            justifyContent: "center",
+            opacity: counterOpacity,
+          }}
+        >
+          <div
+            style={{
+              height: 64,
+              padding: "0 28px",
+              borderRadius: 999,
+              backgroundColor: COLOR.bgWarm,
+              border: `1.5px solid ${COLOR.borderStrong}`,
+              boxShadow: "0 8px 20px rgba(25, 20, 25, 0.06)",
+              display: "flex",
+              alignItems: "center",
+              gap: 14,
+            }}
+          >
+            <span
+              style={{
+                width: 11,
+                height: 11,
+                borderRadius: 99,
+                backgroundColor: COLOR.cyan,
+              }}
+            />
+            <span
+              style={{
+                fontFamily: FONT_SANS,
+                fontSize: 33,
+                fontWeight: 700,
+                color: COLOR.inkMuted,
+                fontVariantNumeric: "tabular-nums",
+                letterSpacing: "0.02em",
+              }}
+            >
+              {counterValue}
+            </span>
+          </div>
+        </div>
+      </AbsoluteFill>
+    </AbsoluteFill>
+  );
+};
+
+// ============================================================================
+// BEAT 5 — PUNCHLINE (f315 - f374, localFrame 0 - 59)
+// ============================================================================
+const PunchlineBeat = ({ localFrame }: { localFrame: number }) => {
+  // Hard cut at f315 -> ONE decisive snap-zoom on mascot (localFrame 0-12 -> global f315-327),
+  // then parked completely solid through f374.
+  const snapZoom = lerp(localFrame, 0, 12, 0, 1, EASE_SNAP);
+  const mascotScale = 0.84 + snapZoom * 0.16;
+  const mascotZ = (1 - snapZoom) * -80;
+  const mascotRotY = -20 + snapZoom * 14; // settles at subtle -6deg showing crisp 3D edge
+
+  // Full punchline sharp & completely stationary from f330 (localFrame 15) to f374 (localFrame 59).
+  // Zero exit animation.
+  const line1Prog = lerp(localFrame, 1, 10, 0, 1, EASE_OUT_CUBIC);
+  const line2Prog = lerp(localFrame, 4, 14, 0, 1, EASE_OUT_CUBIC);
+
+  const line1Y = (1 - line1Prog) * 20;
+  const line1Blur = (1 - line1Prog) * 6;
+  const line2Y = (1 - line2Prog) * 20;
+  const line2Blur = (1 - line2Prog) * 6;
+
+  return (
+    <AbsoluteFill>
+      <EditorialBackground accentShiftX={-12} accentShiftY={0} />
+
+      {/* 3D STAGE LAYER — Hero Mascot Card (same unified background treatment) */}
+      <AbsoluteFill
+        style={{
+          perspective: 1200,
+          perspectiveOrigin: "540px 940px",
+          transformStyle: "preserve-3d",
+        }}
+      >
+        <MascotCard3D
+          asset="mascot-full-play.svg"
+          left={310}
+          top={696}
+          width={460}
+          height={484}
+          translateZ={mascotZ}
+          rotateY={mascotRotY}
+          rotateX={2 * (1 - snapZoom)}
+          scale={mascotScale}
+          depth={12}
+          padding={26}
+          haloStrength={0.75 * snapZoom}
+        />
+      </AbsoluteFill>
+
+      {/* SCREEN-SPACE PUNCHLINE HEADLINE (sharp & motionless f330-f374) */}
+      <AbsoluteFill style={{ pointerEvents: "none" }}>
+        <div
+          style={{
+            position: "absolute",
+            left: SAFE_X,
+            top: 454,
+            width: SAFE_W,
+          }}
+        >
+          <div
+            style={{
+              fontFamily: FONT_SANS,
+              fontSize: 64,
+              fontWeight: 800,
+              lineHeight: 1.12,
+              letterSpacing: "-0.032em",
+              color: COLOR.ink,
+              transform: `translateY(${line1Y}px)`,
+              opacity: line1Prog,
+              filter: line1Blur > 0.1 ? `blur(${line1Blur.toFixed(2)}px)` : undefined,
+            }}
+          >
+            Aku yang tanding.
+          </div>
+          <div
+            style={{
+              fontFamily: FONT_SANS,
+              fontSize: 64,
+              fontWeight: 800,
+              lineHeight: 1.12,
+              letterSpacing: "-0.032em",
+              color: COLOR.magenta,
+              transform: `translateY(${line2Y}px)`,
+              opacity: line2Prog,
+              filter: line2Blur > 0.1 ? `blur(${line2Blur.toFixed(2)}px)` : undefined,
+            }}
+          >
+            Kamu yang bawa aku.
+          </div>
+        </div>
+      </AbsoluteFill>
+    </AbsoluteFill>
+  );
+};
+
+// ============================================================================
+// BEAT 6 — TENANG (f375 - f449, localFrame 0 - 74)
+// ============================================================================
+const TenangBeat = () => {
+  // Immediately calm, zero text, zero zoom, ready for ffmpeg official end card overlay.
+  return (
+    <AbsoluteFill>
+      <EditorialBackground
+        accentShiftX={0}
+        accentShiftY={0}
+        showSubtleGrid={false}
+        calmMode
+      />
+    </AbsoluteFill>
+  );
+};
+
+// ============================================================================
+// MAIN COMPOSITION — AdV4 (1080x1920, 30fps, 450f)
+// ============================================================================
+export const AdV4 = () => {
+  const frame = useCurrentFrame();
+
+  return (
+    <AbsoluteFill
+      style={{
+        width: AD_V4_WIDTH,
+        height: AD_V4_HEIGHT,
+        backgroundColor: COLOR.bgBase,
+        fontFamily: FONT_SANS,
+        overflow: "hidden",
+      }}
+    >
+      {frame < 60 && <HookBeat localFrame={frame} />}
+      {frame >= 60 && frame < 135 && <MetaBeat localFrame={frame - 60} />}
+      {frame >= 135 && frame < 240 && <ArenaBeat localFrame={frame - 135} />}
+      {frame >= 240 && frame < 315 && <TaruhanBeat localFrame={frame - 240} />}
+      {frame >= 315 && frame < 375 && <PunchlineBeat localFrame={frame - 315} />}
+      {frame >= 375 && <TenangBeat />}
+    </AbsoluteFill>
+  );
+};
+
+export default AdV4;

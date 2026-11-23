@@ -1,0 +1,3340 @@
+import {
+  AbsoluteFill,
+  Easing,
+  Img,
+  Sequence,
+  interpolate,
+  spring,
+  staticFile,
+  useCurrentFrame,
+  useVideoConfig,
+} from "remotion";
+
+// ============================================================================
+// SINGLE SOURCE OF TRUTH — LOCKED VERBATIM COPY (NO OTHER ON-SCREEN TEXT)
+// ============================================================================
+const COPY = {
+  kicker: "make.fun contest",
+  token: "AI AGENT",
+  hook: "How good is your AI agent?",
+  modules: {
+    solver: "SOLVER",
+    csv: "CSV",
+    vm: "TINY VM",
+  },
+  stakes: "$500 PRIZE POOL",
+  punchline: "Enter your AI agent on make.fun.",
+} as const;
+
+// ============================================================================
+// DESIGN SYSTEM & 120 BPM GRID (1080x1920 @ 30fps, 450 frames: 0..449)
+// 120 BPM @ 30fps = 15 frames per beat (f0, f15, f30, ..., f375)
+// Safe zone: x120..960, y269..1248 | Badge exclusion: x96..474, y248..424
+// ============================================================================
+const THEME = {
+  colors: {
+    bgTop: "#FFFFFF",
+    bgBase: "#FAF8FC",
+    bgBottom: "#F1ECF6",
+    surface: "#FFFFFF",
+    surfaceSoft: "#F5F1F9",
+    deskTop: "#F7F4FA",
+    deskSide: "#E6DFEE",
+    deskRecess: "#EBE5F2",
+    deskStroke: "#CFC5DB",
+    ink: "#191419",
+    inkMuted: "#6F6478",
+    magenta: "#c41c83",
+    magentaSoft: "#FBEAF4",
+    cyan: "#22d3ee",
+    cyanSoft: "#E6FAFD",
+    lineHair: "#E3DCEB",
+  },
+  font: 'Arial, "Helvetica Neue", Helvetica, sans-serif',
+  ease: {
+    outCubic: Easing.out(Easing.cubic),
+    inCubic: Easing.in(Easing.cubic),
+    inOutCubic: Easing.inOut(Easing.cubic),
+    inOutSin: Easing.inOut(Easing.sin),
+    popUp: Easing.bezier(0.22, 1, 0.36, 1),
+    snapOut: Easing.out(Easing.back(1.14)),
+    snapStrong: Easing.out(Easing.back(1.22)),
+  },
+  spring: {
+    snappy: { damping: 14, stiffness: 300, mass: 0.72 },
+    punch: { damping: 11.5, stiffness: 360, mass: 0.64 },
+    slam: { damping: 11, stiffness: 380, mass: 0.62 },
+    modulePop: { damping: 12, stiffness: 340, mass: 0.66 },
+    detent: { damping: 10.5, stiffness: 360, mass: 0.62 },
+  },
+} as const;
+
+const MASCOT_ASSETS = {
+  happy: staticFile("mascot-tilt-happy.svg"),
+  play: staticFile("mascot-tilt-play.svg"),
+  full: staticFile("mascot-full-play.svg"),
+} as const;
+
+const BEATS = {
+  bpmFrames: 15, // 120 BPM @ 30fps
+  hookStart: 0,
+  hookDuration: 60, // f0..59
+  metaStart: 60,
+  metaDuration: 75, // f60..134
+  tokenLockHit: 75, // Beat 5 (global f75 = local META f15)
+  arenaStart: 135,
+  arenaDuration: 105, // f135..239
+  solverHit: 150, // Beat 10
+  csvHit: 180, // Beat 12
+  vmHit: 210, // Beat 14
+  stakesStart: 240,
+  stakesDuration: 75, // f240..314
+  punchStart: 315,
+  punchDuration: 60, // f315..374 (dead-still f330..374)
+  calmStart: 375,
+  calmDuration: 75, // f375..449
+} as const;
+
+const clamp = (v: number, min: number, max: number): number =>
+  v < min ? min : v > max ? max : v;
+
+const clamp01 = (v: number): number => clamp(v, 0, 1);
+
+// Every interpolate call requires an explicit non-linear easing and clamps both ends.
+const clampInterp = (
+  value: number,
+  inputRange: readonly [number, number],
+  outputRange: readonly [number, number],
+  easing: (t: number) => number,
+): number =>
+  interpolate(
+    value,
+    [inputRange[0], inputRange[1]],
+    [outputRange[0], outputRange[1]],
+    {
+      easing,
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+    },
+  );
+
+// Deterministic 120 BPM hit pulse: peaks on hitFrame, decays to exact 0 in 6 frames.
+const beatPunch = (frame: number, hitFrame: number, amp: number): number => {
+  if (frame < hitFrame - 1 || frame >= hitFrame + 6) {
+    return 0;
+  }
+  if (frame <= hitFrame) {
+    return (
+      clampInterp(frame, [hitFrame - 1, hitFrame], [0, 1], THEME.ease.outCubic) *
+      amp
+    );
+  }
+  return (
+    clampInterp(frame, [hitFrame, hitFrame + 6], [1, 0], THEME.ease.outCubic) *
+    amp
+  );
+};
+
+// Bounded spring with crisp overshoot that locks to exact 1.0 at localFrame === settleDuration.
+const boundedSpring = (
+  frame: number,
+  start: number,
+  fps: number,
+  config: { damping: number; stiffness: number; mass: number },
+  settleDuration: number,
+): number => {
+  const localF = frame - start;
+  if (localF <= 0) {
+    return 0;
+  }
+  if (localF >= settleDuration) {
+    return 1;
+  }
+  const raw = spring({ frame: localF, fps, config });
+  const tailStart = Math.max(3, settleDuration - 3);
+  const env = clampInterp(
+    localF,
+    [tailStart, settleDuration],
+    [1, 0],
+    THEME.ease.outCubic,
+  );
+  return 1 + (raw - 1) * env;
+};
+
+// Fast -> Slow -> Fast C1-smooth speed-ramp curve for META pop-up book unfold (local 45..70 = global f105..130).
+const speedRampUnfold = (localFrame: number): number => {
+  if (localFrame <= 45) {
+    return 0;
+  }
+  if (localFrame <= 52) {
+    // Segment 1 (7f): FAST explosive launch (0 -> 0.42)
+    return clampInterp(localFrame, [45, 52], [0, 0.42], THEME.ease.outCubic);
+  }
+  if (localFrame <= 63) {
+    // Segment 2 (11f): SLOW dramatic mid-air suspension (0.42 -> 0.58)
+    return clampInterp(localFrame, [52, 63], [0.42, 0.58], THEME.ease.inOutSin);
+  }
+  if (localFrame <= 70) {
+    // Segment 3 (7f): FAST slam lock into full open arena (0.58 -> 1.00)
+    return clampInterp(localFrame, [63, 70], [0.58, 1], THEME.ease.inCubic);
+  }
+  return 1;
+};
+
+// ============================================================================
+// KINETIC WORD PRIMITIVE (BLUR -> SHARP + SLIDE + OVERSHOOT SCALE PUNCH)
+// Uses pure primitive props (zero external React namespace dependency).
+// ============================================================================
+type KineticWordStyle = {
+  color?: string;
+  fontSize?: number;
+  fontWeight?: number;
+  letterSpacing?: string;
+  lineHeight?: number;
+  fontVariantNumeric?: "tabular-nums" | "normal";
+};
+
+const KineticWord = ({
+  frame,
+  fps,
+  start,
+  settleDuration = 8,
+  blurDuration = 4,
+  blurFrom = 14,
+  slideY = 42,
+  scaleFrom = 0.68,
+  springConfig = THEME.spring.punch,
+  preSettled = false,
+  text,
+  trailingPunct,
+  trailingColor,
+  glowOpacity = 0,
+  style,
+}: {
+  frame: number;
+  fps: number;
+  start: number;
+  settleDuration?: number;
+  blurDuration?: number;
+  blurFrom?: number;
+  slideY?: number;
+  scaleFrom?: number;
+  springConfig?: { damping: number; stiffness: number; mass: number };
+  preSettled?: boolean;
+  text: string;
+  trailingPunct?: string;
+  trailingColor?: string;
+  glowOpacity?: number;
+  style?: KineticWordStyle;
+}) => {
+  const renderInner = () => (
+    <>
+      {glowOpacity > 0.005 && (
+        <span
+          style={{
+            position: "absolute",
+            left: -26,
+            right: -20,
+            top: -12,
+            bottom: -12,
+            borderRadius: 999,
+            background: `radial-gradient(ellipse at center, rgba(196,28,131,${glowOpacity.toFixed(3)}) 0%, rgba(196,28,131,0) 72%)`,
+            pointerEvents: "none",
+          }}
+        />
+      )}
+      <span style={{ position: "relative" }}>{text}</span>
+      {trailingPunct ? (
+        <span
+          style={{
+            position: "relative",
+            color: trailingColor ?? THEME.colors.ink,
+          }}
+        >
+          {trailingPunct}
+        </span>
+      ) : null}
+    </>
+  );
+
+  if (preSettled) {
+    return (
+      <span
+        style={{
+          position: "relative",
+          display: "inline-block",
+          fontFamily: THEME.font,
+          opacity: 1,
+          transform: "translateY(0px) scale(1)",
+          transformOrigin: "50% 58%",
+          ...style,
+        }}
+      >
+        {renderInner()}
+      </span>
+    );
+  }
+
+  const localF = frame - start;
+  if (localF < 0) {
+    return (
+      <span
+        style={{
+          position: "relative",
+          display: "inline-block",
+          fontFamily: THEME.font,
+          opacity: 0,
+          transform: `translateY(${slideY}px) scale(${scaleFrom})`,
+          transformOrigin: "50% 58%",
+          ...style,
+        }}
+      >
+        {renderInner()}
+      </span>
+    );
+  }
+
+  if (localF >= settleDuration) {
+    return (
+      <span
+        style={{
+          position: "relative",
+          display: "inline-block",
+          fontFamily: THEME.font,
+          opacity: 1,
+          transform: "translateY(0px) scale(1)",
+          transformOrigin: "50% 58%",
+          ...style,
+        }}
+      >
+        {renderInner()}
+      </span>
+    );
+  }
+
+  const p = boundedSpring(frame, start, fps, springConfig, settleDuration);
+  const opacity = clampInterp(
+    localF,
+    [0, Math.min(2.5, blurDuration)],
+    [0, 1],
+    THEME.ease.outCubic,
+  );
+  const blurPx = clampInterp(
+    localF,
+    [0, blurDuration],
+    [blurFrom, 0],
+    THEME.ease.outCubic,
+  );
+  const translateY = (1 - p) * slideY;
+  const scale = scaleFrom + p * (1 - scaleFrom);
+
+  return (
+    <span
+      style={{
+        position: "relative",
+        display: "inline-block",
+        fontFamily: THEME.font,
+        opacity,
+        filter: blurPx > 0.15 ? `blur(${blurPx.toFixed(2)}px)` : undefined,
+        transform: `translateY(${translateY.toFixed(2)}px) scale(${scale.toFixed(4)})`,
+        transformOrigin: "50% 58%",
+        ...style,
+      }}
+    >
+      {renderInner()}
+    </span>
+  );
+};
+
+// ============================================================================
+// STUDIO BACKDROP (5-LAYER STACK: LIGHT PLATE + AURA + RIBBONS + GRAIN + VIGNETTE)
+// Completely frozen across PUNCHLINE hold (f329..374) & TENANG (f375..449).
+// ============================================================================
+const StudioBackdrop = ({
+  frame,
+  isCalmPlate,
+}: {
+  frame: number;
+  isCalmPlate: boolean;
+}) => {
+  const isPunchHold = frame >= 329;
+  const activeMotionFrame = isPunchHold ? 329 : frame;
+  const driftX = isCalmPlate ? 0 : Math.sin(activeMotionFrame / 54) * 28;
+  const driftY = isCalmPlate ? 0 : Math.cos(activeMotionFrame / 60) * 22;
+
+  // Drafting grid appears ONLY during META / ARENA / TARUHAN (f60..314), cleared on HOOK / PUNCHLINE / TENANG
+  const gridIn = clampInterp(frame, [60, 66], [0, 1], THEME.ease.outCubic);
+  const gridOut = clampInterp(frame, [310, 315], [1, 0], THEME.ease.outCubic);
+  const gridOpacity = isCalmPlate ? 0 : gridIn * gridOut * 0.34;
+
+  const grainOffsetX = isCalmPlate || isPunchHold ? 0 : (frame * 7) % 220;
+  const grainOffsetY = isCalmPlate || isPunchHold ? 0 : (frame * 13) % 220;
+  const grainDataUri =
+    "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2'/%3E%3C/filter%3E%3Crect width='220' height='220' filter='url(%23n)' opacity='0.45'/%3E%3C/svg%3E\")";
+
+  return (
+    <AbsoluteFill
+      style={{
+        background: `linear-gradient(180deg, ${THEME.colors.bgTop} 0%, ${THEME.colors.bgBase} 52%, ${THEME.colors.bgBottom} 100%)`,
+        overflow: "hidden",
+      }}
+    >
+      {/* Subtle architectural brand aura orbs */}
+      <div
+        style={{
+          position: "absolute",
+          width: 880,
+          height: 880,
+          borderRadius: "50%",
+          top: -220 + driftY,
+          right: -240 + driftX,
+          background: `radial-gradient(circle, rgba(196,28,131,${isCalmPlate ? 0.042 : 0.07}) 0%, rgba(196,28,131,0) 68%)`,
+        }}
+      />
+      <div
+        style={{
+          position: "absolute",
+          width: 800,
+          height: 800,
+          borderRadius: "50%",
+          bottom: 180 - driftY,
+          left: -260 - driftX,
+          background: `radial-gradient(circle, rgba(34,211,238,${isCalmPlate ? 0.038 : 0.08}) 0%, rgba(34,211,238,0) 68%)`,
+        }}
+      />
+
+      {/* Quiet Jiwa+-inspired architectural background sweep ribbons */}
+      <svg
+        width={1080}
+        height={1920}
+        viewBox="0 0 1080 1920"
+        style={{
+          position: "absolute",
+          inset: 0,
+          opacity: isCalmPlate ? 0.42 : 0.56,
+        }}
+      >
+        <path
+          d="M -60 1510 Q 520 1350 1140 1560"
+          fill="none"
+          stroke={THEME.colors.magenta}
+          strokeWidth={isCalmPlate ? 28 : 24}
+          strokeOpacity={isCalmPlate ? 0.04 : 0.058}
+        />
+        <path
+          d="M -80 210 Q 560 75 1160 250"
+          fill="none"
+          stroke={THEME.colors.cyan}
+          strokeWidth={18}
+          strokeOpacity={isCalmPlate ? 0.045 : 0.062}
+        />
+      </svg>
+
+      {/* Studio desk drafting grid (active only on desk/arena beats) */}
+      {gridOpacity > 0.01 && (
+        <div
+          style={{
+            position: "absolute",
+            left: 88,
+            top: 432,
+            width: 904,
+            height: 836,
+            opacity: gridOpacity,
+            backgroundImage: `linear-gradient(to right, ${THEME.colors.lineHair} 1px, transparent 1px), linear-gradient(to bottom, ${THEME.colors.lineHair} 1px, transparent 1px)`,
+            backgroundSize: "44px 44px",
+            maskImage:
+              "radial-gradient(ellipse 72% 66% at 50% 54%, black 38%, transparent 100%)",
+            WebkitMaskImage:
+              "radial-gradient(ellipse 72% 66% at 50% 54%, black 38%, transparent 100%)",
+          }}
+        />
+      )}
+
+      {/* Subtle procedural tactile paper grain */}
+      <AbsoluteFill
+        style={{
+          backgroundImage: grainDataUri,
+          backgroundSize: "220px 220px",
+          backgroundPosition: `${grainOffsetX}px ${grainOffsetY}px`,
+          opacity: isCalmPlate ? 0.018 : 0.025,
+          mixBlendMode: "multiply",
+          pointerEvents: "none",
+        }}
+      />
+
+      {/* Soft clean studio vignette */}
+      <AbsoluteFill
+        style={{
+          background:
+            "radial-gradient(ellipse 84% 76% at 50% 44%, transparent 64%, rgba(25,20,25,0.052) 100%)",
+          pointerEvents: "none",
+        }}
+      />
+    </AbsoluteFill>
+  );
+};
+
+// ============================================================================
+// PERSISTENT SMALL LABEL — "make.fun contest" (f0..374; absent on TENANG)
+// Safe zone top-right (~x676..956, y304..358), >200px clear of badge box (x96..474, y248..424).
+// 100% sharp at frame 0; 100% motionless across TARUHAN hold & PUNCHLINE hold.
+// ============================================================================
+const KickerLabel = () => {
+  const frame = useCurrentFrame();
+  // Single tactile micro-pulse on Beat 5 token lock (f75); dead-still on f0 & f258..374
+  const hitScale = 1 + beatPunch(frame, BEATS.tokenLockHit, 0.032);
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        right: 124,
+        top: 304,
+        height: 54,
+        paddingLeft: 20,
+        paddingRight: 22,
+        borderRadius: 999,
+        backgroundColor: THEME.colors.surface,
+        border: `2px solid ${THEME.colors.lineHair}`,
+        boxShadow: "0 8px 20px rgba(25,20,25,0.06)",
+        display: "flex",
+        alignItems: "center",
+        gap: 10,
+        transform: hitScale !== 1 ? `scale(${hitScale.toFixed(4)})` : undefined,
+        transformOrigin: "100% 50%",
+      }}
+    >
+      <div
+        style={{
+          width: 10,
+          height: 10,
+          borderRadius: 3,
+          backgroundColor: THEME.colors.magenta,
+          transform: "rotate(45deg)",
+          flexShrink: 0,
+        }}
+      />
+      <span
+        style={{
+          fontFamily: THEME.font,
+          fontSize: 25,
+          fontWeight: 700,
+          letterSpacing: "0.01em",
+          color: THEME.colors.ink,
+          lineHeight: 1,
+          whiteSpace: "nowrap",
+        }}
+      >
+        {COPY.kicker}
+      </span>
+    </div>
+  );
+};
+
+// ============================================================================
+// TACTILE "AI AGENT" HARDWARE KEY-CARTRIDGE TOKEN (NOT A COIN!)
+// Chamfered 286x146 hardware cartridge with connector tongue + pins, grip ribs,
+// uniform #FFFFFF relief bay for all 3 Kiro mascot SVGs (zero flash), and "AI AGENT".
+// ============================================================================
+type MascotVariant = "happy" | "play" | "full";
+
+const AgentToken = ({
+  x,
+  y,
+  scale,
+  rotateY,
+  rotateX,
+  elevation,
+  isLocked,
+  mascot,
+}: {
+  x: number;
+  y: number;
+  scale: number;
+  rotateY: number;
+  rotateX: number;
+  elevation: number;
+  isLocked: boolean;
+  mascot: MascotVariant;
+}) => {
+  const tokenW = 286;
+  const tokenH = 146;
+
+  const shadowScaleX = 0.95 + elevation * 0.007;
+  const shadowScaleY = 0.92 + elevation * 0.008;
+  const shadowOffsetY = 11 + elevation * 0.9;
+  const shadowBlur = 7 + elevation * 0.55;
+  const shadowOpacity = clamp(0.25 - elevation * 0.0042, 0.11, 0.27);
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: x - tokenW / 2,
+        top: y - tokenH / 2,
+        width: tokenW,
+        height: tokenH,
+      }}
+    >
+      {/* Dynamic grounded contact shadow */}
+      <div
+        style={{
+          position: "absolute",
+          left: 8,
+          right: 4,
+          top: shadowOffsetY,
+          bottom: -10,
+          borderRadius: 22,
+          backgroundColor: `rgba(25,20,25,${shadowOpacity.toFixed(3)})`,
+          filter: `blur(${shadowBlur.toFixed(1)}px)`,
+          transform: `scale(${(shadowScaleX * scale).toFixed(4)}, ${(shadowScaleY * scale).toFixed(4)})`,
+          transformOrigin: "50% 50%",
+        }}
+      />
+
+      {/* Elevated 3D hardware cartridge body */}
+      <div
+        style={{
+          position: "relative",
+          width: "100%",
+          height: "100%",
+          transform: `perspective(1200px) translateY(${(-elevation).toFixed(2)}px) rotateX(${rotateX.toFixed(2)}deg) rotateY(${rotateY.toFixed(2)}deg) scale(${scale.toFixed(4)})`,
+          transformOrigin: "50% 50%",
+        }}
+      >
+        {/* Right-side hardware connector tongue */}
+        <div
+          style={{
+            position: "absolute",
+            right: -16,
+            top: 38,
+            width: 26,
+            height: 70,
+            borderRadius: "0 12px 12px 0",
+            backgroundColor: isLocked ? THEME.colors.cyan : THEME.colors.deskSide,
+            border: `3.5px solid ${THEME.colors.ink}`,
+            borderLeft: "none",
+            display: "flex",
+            flexDirection: "column",
+            justifyContent: "center",
+            alignItems: "center",
+            gap: 8,
+          }}
+        >
+          {[0, 1, 2].map((pin) => (
+            <div
+              key={pin}
+              style={{
+                width: 10,
+                height: 4.5,
+                borderRadius: 2,
+                backgroundColor: isLocked ? THEME.colors.ink : THEME.colors.inkMuted,
+              }}
+            />
+          ))}
+        </div>
+
+        {/* Extruded 3D dark thickness lip */}
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            transform: "translateY(10px)",
+            borderRadius: 18,
+            backgroundColor: THEME.colors.ink,
+          }}
+        />
+
+        {/* Main cartridge chassis */}
+        <div
+          style={{
+            position: "relative",
+            width: "100%",
+            height: "100%",
+            borderRadius: 18,
+            backgroundColor: THEME.colors.surface,
+            border: `3.5px solid ${THEME.colors.ink}`,
+            boxShadow: isLocked
+              ? "0 0 0 4px rgba(34,211,238,0.34), inset 0 2px 0 rgba(255,255,255,0.95)"
+              : "inset 0 2px 0 rgba(255,255,255,0.95)",
+            display: "flex",
+            alignItems: "center",
+            paddingLeft: 14,
+            paddingRight: 16,
+            gap: 13,
+            overflow: "hidden",
+          }}
+        >
+          {/* Top brand keystripe */}
+          <div
+            style={{
+              position: "absolute",
+              left: 0,
+              right: 0,
+              top: 0,
+              height: 10,
+              background: isLocked
+                ? `linear-gradient(90deg, ${THEME.colors.magenta} 0%, ${THEME.colors.cyan} 100%)`
+                : THEME.colors.magenta,
+            }}
+          />
+
+          {/* Left tactile grip ribs */}
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: 7,
+              paddingTop: 6,
+              flexShrink: 0,
+            }}
+          >
+            {[0, 1, 2, 3].map((rib) => (
+              <div
+                key={rib}
+                style={{
+                  width: 7,
+                  height: 13,
+                  borderRadius: 3.5,
+                  backgroundColor: THEME.colors.deskSide,
+                  border: `1.5px solid ${THEME.colors.deskStroke}`,
+                }}
+              />
+            ))}
+          </div>
+
+          {/* Uniform #FFFFFF Mascot Relief Bay (identical backing across all 3 SVGs -> zero flash) */}
+          <div
+            style={{
+              position: "relative",
+              width: 84,
+              height: 84,
+              marginTop: 6,
+              borderRadius: 14,
+              backgroundColor: "#FFFFFF",
+              border: `2px solid ${THEME.colors.lineHair}`,
+              boxShadow: "inset 0 2px 6px rgba(25,20,25,0.09)",
+              flexShrink: 0,
+              overflow: "hidden",
+            }}
+          >
+            <Img
+              src={MASCOT_ASSETS.happy}
+              alt=""
+              style={{
+                position: "absolute",
+                inset: 6,
+                width: "calc(100% - 12px)",
+                height: "calc(100% - 12px)",
+                objectFit: "contain",
+                opacity: mascot === "happy" ? 1 : 0,
+              }}
+            />
+            <Img
+              src={MASCOT_ASSETS.play}
+              alt=""
+              style={{
+                position: "absolute",
+                inset: 6,
+                width: "calc(100% - 12px)",
+                height: "calc(100% - 12px)",
+                objectFit: "contain",
+                opacity: mascot === "play" ? 1 : 0,
+              }}
+            />
+            <Img
+              src={MASCOT_ASSETS.full}
+              alt=""
+              style={{
+                position: "absolute",
+                inset: 6,
+                width: "calc(100% - 12px)",
+                height: "calc(100% - 12px)",
+                objectFit: "contain",
+                opacity: mascot === "full" ? 1 : 0,
+              }}
+            />
+          </div>
+
+          {/* Nameplate block — verbatim "AI AGENT" */}
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              justifyContent: "center",
+              gap: 8,
+              marginTop: 6,
+              flex: 1,
+            }}
+          >
+            <span
+              style={{
+                fontFamily: THEME.font,
+                fontSize: 27,
+                fontWeight: 900,
+                letterSpacing: "0.02em",
+                color: THEME.colors.ink,
+                lineHeight: 1.04,
+                whiteSpace: "nowrap",
+              }}
+            >
+              {COPY.token}
+            </span>
+            {/* Status LED geometry (zero extra text) */}
+            <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+              <div
+                style={{
+                  width: 54,
+                  height: 7,
+                  borderRadius: 4,
+                  backgroundColor: isLocked ? THEME.colors.cyan : THEME.colors.magenta,
+                }}
+              />
+              <div
+                style={{
+                  width: 14,
+                  height: 7,
+                  borderRadius: 4,
+                  backgroundColor: isLocked
+                    ? THEME.colors.magenta
+                    : THEME.colors.deskStroke,
+                }}
+              />
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ============================================================================
+// EDITORIAL GEOMETRIC HAND PUSHING THE TOKEN INTO THE SLOT
+// ============================================================================
+const PushingHand = ({
+  tokenLeftX,
+  tokenCenterY,
+  scale = 1,
+  offsetX = 0,
+  offsetY = 0,
+  opacity = 1,
+}: {
+  tokenLeftX: number;
+  tokenCenterY: number;
+  scale?: number;
+  offsetX?: number;
+  offsetY?: number;
+  opacity?: number;
+}) => {
+  if (opacity <= 0.01) {
+    return null;
+  }
+
+  const baseW = 300;
+  const baseH = 160;
+  const handW = baseW * scale;
+  const handH = baseH * scale;
+  const handLeft = tokenLeftX - handW + 28 * scale + offsetX;
+  const handTop = tokenCenterY - handH / 2 + 4 * scale + offsetY;
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: handLeft,
+        top: handTop,
+        width: handW,
+        height: handH,
+        opacity,
+        pointerEvents: "none",
+      }}
+    >
+      <svg width={handW} height={handH} viewBox="0 0 280 148">
+        <ellipse cx={162} cy={126} rx={94} ry={17} fill="rgba(25,20,25,0.14)" />
+        <path
+          d="M 0 36 L 86 36 Q 98 36 98 48 L 98 106 Q 98 118 86 118 L 0 118 Z"
+          fill={THEME.colors.ink}
+        />
+        <rect x={70} y={36} width={10} height={82} fill={THEME.colors.magenta} />
+        <path
+          d="M 94 42 L 184 42 Q 204 42 214 50 L 252 50 Q 266 50 266 63 Q 266 75 252 75 L 258 75 Q 270 75 270 87 Q 270 99 256 99 L 242 99 Q 252 99 252 110 Q 252 120 238 120 L 166 120 Q 140 120 124 112 L 94 112 Z"
+          fill="#F4D7C8"
+          stroke={THEME.colors.ink}
+          strokeWidth={3.5}
+          strokeLinejoin="round"
+        />
+        <path
+          d="M 150 42 Q 170 22 204 28 Q 222 31 224 44 Q 225 52 212 54 L 168 54"
+          fill="#F4D7C8"
+          stroke={THEME.colors.ink}
+          strokeWidth={3.5}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+        <line
+          x1={206}
+          y1={75}
+          x2={252}
+          y2={75}
+          stroke={THEME.colors.ink}
+          strokeWidth={3}
+          strokeLinecap="round"
+        />
+        <line
+          x1={202}
+          y1={99}
+          x2={244}
+          y2={99}
+          stroke={THEME.colors.ink}
+          strokeWidth={3}
+          strokeLinecap="round"
+        />
+        <path
+          d="M 184 62 Q 188 74 184 86"
+          fill="none"
+          stroke="rgba(25,20,25,0.22)"
+          strokeWidth={2.5}
+          strokeLinecap="round"
+        />
+      </svg>
+    </div>
+  );
+};
+
+// ============================================================================
+// BEAT 1: HOOK (f0..59) — FULL-SCREEN KINETIC PHRASES -> DESK+TOKEN ENTRY (f45..59)
+// - f0..11: Giant "How good" alone, 100% razor-sharp at frame 0 (fills safe width)
+// - f12..20: "How good" lifts, "is your" punches full-width (8f overshoot)
+// - f21..29: "AI agent?" slams full-width with magenta accent (8f overshoot)
+// - f30..44: Full headline 100% razor-sharp & dead-still (15f read hold)
+// - f45..55: Headline compacts cleanly above, desk + "AI AGENT" token enter below
+// - f56..59: 4-frame blur-zoom cut directly into META hero close-up
+// ============================================================================
+const HookBeat = () => {
+  const frame = useCurrentFrame(); // local 0..59 == global 0..59
+  const { fps } = useVideoConfig();
+
+  const words = COPY.hook.split(" "); // ["How", "good", "is", "your", "AI", "agent?"]
+  const phrase1 = `${words[0]} ${words[1]}`; // "How good"
+  const wordIs = words[2]; // "is"
+  const wordYour = words[3]; // "your"
+  const wordAi = words[4]; // "AI"
+  const agentRaw = words[5]; // "agent?"
+  const agentCore = agentRaw.slice(0, agentRaw.length - 1); // "agent"
+  const agentPunct = agentRaw.slice(agentRaw.length - 1); // "?"
+
+  // Phrase 1 ("How good"): razor-sharp centered hero f0..10 -> glides to Line 1 f10..15
+  const p1Shift = clampInterp(frame, [10, 15], [0, 1], THEME.ease.outCubic);
+  const p1Top = 708 - p1Shift * 188; // 708 -> 520
+  const p1Scale = 1 - p1Shift * 0.22; // 1.00 (164px) -> 0.78 (~128px)
+
+  // Phrase 2 ("is your"): enters f12..20 hero-sized -> compacts slightly f20..25 for Line 3
+  const p2Compact = clampInterp(frame, [20, 25], [0, 1], THEME.ease.outCubic);
+  const p2Top = 696 - p2Compact * 40; // 696 -> 656
+  const p2Scale = 1 - p2Compact * 0.22; // 1.00 (152px) -> 0.78 (~119px)
+
+  // Phrase 3 ("AI agent?"): slams in f21..29, settled & razor-sharp by f29 (<= f30!)
+  const underlineT = clampInterp(frame, [24, 29], [0, 1], THEME.ease.outCubic);
+  const aiGlowOpacity = clampInterp(frame, [23, 29], [0, 0.22], THEME.ease.outCubic);
+
+  // End-of-beat desk + token handoff (f45..55): headline compacts above y446..782
+  const handoffT = clampInterp(frame, [45, 52], [0, 1], THEME.ease.outCubic);
+  const headGroupY = handoffT * -74;
+  const headGroupScale = 1 - handoffT * 0.28; // 1.0 -> 0.72
+
+  // Desk + token enter ONLY at f45..59 (10-frame overshoot entrance f45..55 <= 12f)
+  const deskEnter = clampInterp(frame, [45, 55], [0, 1], THEME.ease.snapOut);
+  const deskOpacity = clampInterp(frame, [45, 49], [0, 1], THEME.ease.outCubic);
+  const deskTop = 842 + (1 - deskEnter) * 310;
+  const tokenPreviewX = 356 - (1 - deskEnter) * 140;
+  const tokenPreviewY = deskTop + 178;
+  const handPreviewT = clampInterp(frame, [48, 55], [0, 1], THEME.ease.outCubic);
+
+  // 4-frame blur-zoom cut OUT into META (f56..59)
+  const cutOut = clampInterp(frame, [56, 59], [0, 1], THEME.ease.inCubic);
+  const cutScale = 1 + cutOut * 0.38;
+  const cutBlur = cutOut * 10;
+  const cutOpacity = 1 - cutOut;
+
+  return (
+    <AbsoluteFill
+      style={{
+        opacity: cutOpacity,
+        transform:
+          cutScale !== 1 ? `scale(${cutScale.toFixed(4)})` : undefined,
+        transformOrigin: "540px 1000px",
+        filter: cutBlur > 0.15 ? `blur(${cutBlur.toFixed(1)}px)` : undefined,
+      }}
+    >
+      {/* Full-screen kinetic headline container */}
+      <div
+        style={{
+          position: "absolute",
+          inset: 0,
+          transform:
+            handoffT > 0
+              ? `translateY(${headGroupY.toFixed(2)}px) scale(${headGroupScale.toFixed(4)})`
+              : undefined,
+          transformOrigin: "540px 520px",
+        }}
+      >
+        {/* Phrase 1: "How good" — 100% RAZOR-SHARP AT FRAME 0, fills safe-zone width */}
+        <div
+          style={{
+            position: "absolute",
+            left: 124,
+            top: p1Top,
+            width: 832,
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            transform:
+              p1Scale !== 1 ? `scale(${p1Scale.toFixed(4)})` : undefined,
+            transformOrigin: "50% 0%",
+          }}
+        >
+          <KineticWord
+            frame={frame}
+            fps={fps}
+            start={0}
+            preSettled={true}
+            text={phrase1}
+            style={{
+              fontSize: 164,
+              fontWeight: 900,
+              lineHeight: 0.94,
+              letterSpacing: "-0.045em",
+              color: THEME.colors.ink,
+            }}
+          />
+          {/* Minimal crisp graphic bar visible on frame 0, fades as phrase 2 takes focus */}
+          <div
+            style={{
+              marginTop: 18,
+              width: 148,
+              height: 8,
+              borderRadius: 4,
+              backgroundColor: THEME.colors.ink,
+              opacity: 1 - p1Shift,
+            }}
+          />
+        </div>
+
+        {/* Phrase 2: "is your" — enters f12..20 with 8-frame overshoot punch */}
+        {frame >= 12 && (
+          <div
+            style={{
+              position: "absolute",
+              left: 124,
+              top: p2Top,
+              width: 832,
+              display: "flex",
+              justifyContent: "center",
+              alignItems: "baseline",
+              columnGap: 28,
+              transform:
+                p2Scale !== 1 ? `scale(${p2Scale.toFixed(4)})` : undefined,
+              transformOrigin: "50% 0%",
+            }}
+          >
+            <KineticWord
+              frame={frame}
+              fps={fps}
+              start={12}
+              settleDuration={8}
+              blurDuration={4}
+              blurFrom={14}
+              slideY={48}
+              scaleFrom={0.68}
+              text={wordIs}
+              style={{
+                fontSize: 152,
+                fontWeight: 900,
+                lineHeight: 0.95,
+                letterSpacing: "-0.04em",
+                color: THEME.colors.ink,
+              }}
+            />
+            <KineticWord
+              frame={frame}
+              fps={fps}
+              start={13}
+              settleDuration={8}
+              blurDuration={4}
+              blurFrom={14}
+              slideY={48}
+              scaleFrom={0.68}
+              text={wordYour}
+              style={{
+                fontSize: 152,
+                fontWeight: 900,
+                lineHeight: 0.95,
+                letterSpacing: "-0.04em",
+                color: THEME.colors.ink,
+              }}
+            />
+          </div>
+        )}
+
+        {/* Phrase 3: "AI agent?" — climax magenta slam, sharp & locked <= f30 */}
+        {frame >= 21 && (
+          <div
+            style={{
+              position: "absolute",
+              left: 124,
+              top: 782,
+              width: 832,
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+            }}
+          >
+            <div
+              style={{
+                position: "relative",
+                display: "inline-flex",
+                justifyContent: "center",
+                alignItems: "baseline",
+                columnGap: 24,
+              }}
+            >
+              <KineticWord
+                frame={frame}
+                fps={fps}
+                start={21}
+                settleDuration={8}
+                blurDuration={4}
+                blurFrom={16}
+                slideY={-20}
+                scaleFrom={1.32}
+                springConfig={THEME.spring.slam}
+                text={wordAi}
+                glowOpacity={aiGlowOpacity}
+                style={{
+                  fontSize: 158,
+                  fontWeight: 900,
+                  lineHeight: 0.96,
+                  letterSpacing: "-0.045em",
+                  color: THEME.colors.magenta,
+                }}
+              />
+              <KineticWord
+                frame={frame}
+                fps={fps}
+                start={22}
+                settleDuration={7}
+                blurDuration={4}
+                blurFrom={16}
+                slideY={-20}
+                scaleFrom={1.3}
+                springConfig={THEME.spring.slam}
+                text={agentCore}
+                trailingPunct={agentPunct}
+                trailingColor={THEME.colors.ink}
+                style={{
+                  fontSize: 158,
+                  fontWeight: 900,
+                  lineHeight: 0.96,
+                  letterSpacing: "-0.045em",
+                  color: THEME.colors.magenta,
+                }}
+              />
+            </div>
+
+            {/* Gradient accent bar locked by f29 */}
+            <div
+              style={{
+                marginTop: 12,
+                width: 630,
+                height: 9,
+                borderRadius: 5,
+                background: `linear-gradient(90deg, ${THEME.colors.magenta} 0%, ${THEME.colors.cyan} 100%)`,
+                transform: `scaleX(${underlineT.toFixed(4)})`,
+                transformOrigin: "0% 50%",
+              }}
+            />
+          </div>
+        )}
+      </div>
+
+      {/* End-of-HOOK Desk + Token Introduction (strictly f45..59) */}
+      {frame >= 45 && (
+        <div style={{ position: "absolute", inset: 0, opacity: deskOpacity }}>
+          {/* Ground shadow */}
+          <div
+            style={{
+              position: "absolute",
+              left: 170,
+              top: deskTop + 26,
+              width: 740,
+              height: 344,
+              borderRadius: 34,
+              backgroundColor: "rgba(25,20,25,0.13)",
+              filter: "blur(18px)",
+            }}
+          />
+
+          {/* Compact desk surface preview */}
+          <div
+            style={{
+              position: "absolute",
+              left: 162,
+              top: deskTop,
+              width: 756,
+              height: 356,
+              borderRadius: 30,
+              backgroundColor: THEME.colors.deskTop,
+              border: `3.5px solid ${THEME.colors.ink}`,
+              boxShadow: "0 12px 0 #DDD4E8",
+              transform: "perspective(1400px) rotateX(14deg) rotateY(-6deg)",
+              transformOrigin: "50% 55%",
+              overflow: "hidden",
+            }}
+          >
+            {/* Horizontal guide track */}
+            <div
+              style={{
+                position: "absolute",
+                left: 56,
+                top: "50%",
+                transform: "translateY(-50%)",
+                width: 390,
+                height: 50,
+                borderRadius: 14,
+                backgroundColor: THEME.colors.deskRecess,
+                border: `2px solid ${THEME.colors.deskStroke}`,
+              }}
+            />
+            {/* Recessed dock slot */}
+            <div
+              style={{
+                position: "absolute",
+                left: "56%",
+                top: "50%",
+                width: 306,
+                height: 164,
+                transform: "translate(-50%, -50%)",
+                borderRadius: 22,
+                backgroundColor: THEME.colors.deskRecess,
+                border: `3.5px solid ${THEME.colors.magenta}`,
+                boxShadow: "inset 0 6px 14px rgba(25,20,25,0.12)",
+              }}
+            >
+              <div
+                style={{
+                  position: "absolute",
+                  right: 11,
+                  top: 38,
+                  width: 13,
+                  height: 82,
+                  borderRadius: 6,
+                  backgroundColor: THEME.colors.magenta,
+                }}
+              />
+            </div>
+          </div>
+
+          {/* Hardware cartridge token entering on desk */}
+          <AgentToken
+            x={tokenPreviewX}
+            y={tokenPreviewY}
+            scale={1}
+            rotateY={-6}
+            rotateX={6}
+            elevation={12}
+            isLocked={false}
+            mascot="happy"
+          />
+
+          {/* Editorial hand arriving behind token edge */}
+          <PushingHand
+            tokenLeftX={tokenPreviewX - 143}
+            tokenCenterY={tokenPreviewY}
+            scale={1}
+            offsetX={(1 - handPreviewT) * -180}
+            opacity={handPreviewT}
+          />
+        </div>
+      )}
+    </AbsoluteFill>
+  );
+};
+
+// ============================================================================
+// BEAT 2: META (f60..134) — GIANT HERO TOKEN -> LOCK HOLD (>=15f STILL) -> SPEED-RAMP UNFOLD
+// - f60..64 (local 0..4): Blur-zoom cut IN onto massive hero token (scale 1.88 = ~538x274px)
+// - f64..75 (local 4..15): Hand pushes token into slot (11f <= 12f), snaps locked on Beat 5 (f75)
+// - f77..84 (local 17..24): Hand retracts off-left, detent + lock ring complete
+// - f85..104 (local 25..44): 20 FULL FRAMES DEAD-STILL on locked hero token (>= 15f required!)
+// - f105..130 (local 45..70): FAST -> SLOW -> FAST speed-ramp pop-up book unfold into Arena deck
+// - f131..134 (local 71..74): 4-frame blur-zoom cut into ARENA
+// ============================================================================
+const MetaBeat = () => {
+  const frame = useCurrentFrame(); // local 0..74 == global 60..134
+  const { fps } = useVideoConfig();
+
+  // Blur-zoom cut IN (local 0..4) & OUT (local 71..74)
+  const cutInT = clampInterp(frame, [0, 4], [0, 1], THEME.ease.outCubic);
+  const cutOutT = clampInterp(frame, [71, 74], [0, 1], THEME.ease.inCubic);
+  const cutScale = (0.78 + cutInT * 0.22) * (1 + cutOutT * 0.26);
+  const cutBlur = (1 - cutInT) * 10 + cutOutT * 9;
+  const cutOpacity = (0.25 + cutInT * 0.75) * (1 - cutOutT);
+
+  // Hand pushes giant hero token into slot (local 4..15 = 11 frames <= 12f)
+  const pushT = clampInterp(frame, [4, 15], [0, 1], THEME.ease.inOutCubic);
+  const isLocked = frame >= 15; // Global f75 (Beat 5)
+  const detentSpring = boundedSpring(frame, 15, fps, THEME.spring.detent, 7); // Settled exact 1.0 by local 22
+  const lockPulse = beatPunch(frame, 15, 0.085); // Exact 0 by local 21
+  const lockRingT = clampInterp(frame, [15, 24], [0, 1], THEME.ease.outCubic);
+
+  // Hand exits cleanly local 17..24 -> completely gone for the 20f dead-still hold (local 25..44)
+  const handExitT = clampInterp(frame, [17, 24], [0, 1], THEME.ease.inCubic);
+  const handCompress =
+    frame >= 14 && frame <= 17
+      ? Math.sin(clampInterp(frame, [14, 17], [0, Math.PI], THEME.ease.inOutSin)) * 8
+      : 0;
+  const showHand = frame <= 24;
+
+  // Speed-ramp pop-up book unfold (local 45..70 = global f105..130): FAST -> SLOW -> FAST
+  const unfoldT = speedRampUnfold(frame);
+  const deckSnapPunch = beatPunch(frame, 70, 0.024);
+
+  // Close-up desk geometry morphs smoothly into full Arena deck during unfoldT
+  const deskLeft = 176 - unfoldT * 24; // 176 -> 152
+  const deskWidth = 728 + unfoldT * 48; // 728 -> 776 (x152..928)
+  const deskTop = 588 - unfoldT * 126; // 588 -> 462
+  const deskHeight = 454 + unfoldT * 282; // 454 -> 736 (y462..1198)
+  const deskRotateX = 11 - unfoldT * 7; // 11deg -> 4deg
+  const deskRotateY = (1 - pushT) * -5; // -5deg -> 0deg (max 5deg)
+
+  // Pop-up book hinged side wings (strictly |rotateY| <= 26deg <= 30deg!)
+  const wingProgress = clampInterp(unfoldT, [0.04, 0.96], [0, 1], THEME.ease.outCubic);
+  const wingOpacity = clampInterp(unfoldT, [0.02, 0.35], [0, 1], THEME.ease.outCubic);
+  const wingSlide = wingProgress * 26;
+  const leftWingYaw = clamp(26 - wingProgress * 18, 8, 26);
+  const rightWingYaw = -leftWingYaw;
+
+  // Circuit rails trace outward during slow-to-fast unfold
+  const railDraw = clampInterp(unfoldT, [0.35, 1], [0, 1], THEME.ease.outCubic);
+
+  // Giant Hero Token (scale 1.88 during push & 20f hold -> smoothly docks to Arena Hub scale 0.90)
+  const tokenX =
+    396 +
+    pushT * 144 +
+    (isLocked ? (1 - detentSpring) * -16 : 0); // 396 -> 540
+  const tokenY = 815 + unfoldT * 281; // Hero center 815 -> Arena hub 1096
+  const tokenScale = 1.88 - unfoldT * 0.98 + lockPulse; // 1.88 -> 0.90
+  const tokenRotateY = (1 - pushT) * -6; // max 6deg
+  const tokenRotateX = (1 - unfoldT) * 5;
+  const lockSlamDip = isLocked
+    ? clampInterp(frame, [15, 22], [1, 0], THEME.ease.outCubic) * 8
+    : 0;
+  const tokenElevation = (isLocked ? 6 : 15) - lockSlamDip;
+
+  // Dock slot moves from center of close-up desk to bottom hub of unfolded Arena deck
+  const slotTopPx = 227 + unfoldT * 407; // aligns with tokenY (588+227=815 -> 462+634=1096)
+  const slotScale = 1.82 - unfoldT * 0.88; // 1.82 -> 0.94
+
+  return (
+    <AbsoluteFill
+      style={{
+        opacity: cutOpacity,
+        transform: `scale(${(cutScale + deckSnapPunch).toFixed(4)})`,
+        transformOrigin: "540px 815px",
+        filter: cutBlur > 0.15 ? `blur(${cutBlur.toFixed(1)}px)` : undefined,
+      }}
+    >
+      {/* Dynamic ground shadow expanding with pop-up unfold */}
+      <div
+        style={{
+          position: "absolute",
+          left: deskLeft - wingSlide * 0.35,
+          top: deskTop + 28,
+          width: deskWidth + wingSlide * 0.7,
+          height: deskHeight - 4,
+          borderRadius: 36,
+          backgroundColor: `rgba(25,20,25,${(0.15 - unfoldT * 0.03).toFixed(3)})`,
+          filter: `blur(${(18 + unfoldT * 10).toFixed(1)}px)`,
+        }}
+      />
+
+      {/* Left Pop-Up Desk Wing (|rotateY| <= 26deg) */}
+      {wingOpacity > 0.01 && (
+        <div
+          style={{
+            position: "absolute",
+            left: deskLeft - wingSlide * 0.85,
+            top: deskTop + 44,
+            width: 120,
+            height: deskHeight - 88,
+            borderRadius: "24px 8px 8px 24px",
+            backgroundColor: THEME.colors.deskSide,
+            border: `3.5px solid ${THEME.colors.ink}`,
+            transform: `perspective(1400px) rotateX(${deskRotateX.toFixed(2)}deg) rotateY(${leftWingYaw.toFixed(2)}deg)`,
+            transformOrigin: "100% 50%",
+            opacity: wingOpacity,
+            boxShadow: "inset -10px 0 18px rgba(25,20,25,0.08)",
+          }}
+        />
+      )}
+
+      {/* Right Pop-Up Desk Wing (|rotateY| <= 26deg) */}
+      {wingOpacity > 0.01 && (
+        <div
+          style={{
+            position: "absolute",
+            right: 1080 - (deskLeft + deskWidth) - wingSlide * 0.85,
+            top: deskTop + 44,
+            width: 120,
+            height: deskHeight - 88,
+            borderRadius: "8px 24px 24px 8px",
+            backgroundColor: THEME.colors.deskSide,
+            border: `3.5px solid ${THEME.colors.ink}`,
+            transform: `perspective(1400px) rotateX(${deskRotateX.toFixed(2)}deg) rotateY(${rightWingYaw.toFixed(2)}deg)`,
+            transformOrigin: "0% 50%",
+            opacity: wingOpacity,
+            boxShadow: "inset 10px 0 18px rgba(25,20,25,0.08)",
+          }}
+        />
+      )}
+
+      {/* Primary Hero Desk Surface -> Pop-Up Book Arena Deck */}
+      <div
+        style={{
+          position: "absolute",
+          left: deskLeft,
+          top: deskTop,
+          width: deskWidth,
+          height: deskHeight,
+          borderRadius: 32,
+          backgroundColor: THEME.colors.deskTop,
+          border: `3.5px solid ${THEME.colors.ink}`,
+          boxShadow: "0 14px 0 #DDD4E8, 0 28px 46px rgba(25,20,25,0.12)",
+          transform: `perspective(1400px) rotateX(${deskRotateX.toFixed(2)}deg) rotateY(${deskRotateY.toFixed(2)}deg)`,
+          transformOrigin: "50% 55%",
+          overflow: "hidden",
+        }}
+      >
+        {/* Pop-up book central fold creases */}
+        <div
+          style={{
+            position: "absolute",
+            left: 0,
+            right: 0,
+            top: "50%",
+            height: 2,
+            backgroundColor: THEME.colors.deskStroke,
+            opacity: 0.45 + unfoldT * 0.35,
+          }}
+        />
+        <div
+          style={{
+            position: "absolute",
+            left: "50%",
+            top: 0,
+            bottom: 0,
+            width: 2,
+            backgroundColor: THEME.colors.deskStroke,
+            opacity: 0.25 + unfoldT * 0.45,
+          }}
+        />
+
+        {/* Pop-up paper-engineering corner struts deploying during speed-ramp unfold */}
+        {unfoldT > 0.02 && (
+          <svg
+            width={776}
+            height={736}
+            viewBox="0 0 776 736"
+            style={{
+              position: "absolute",
+              inset: 0,
+              opacity: unfoldT * 0.92,
+            }}
+          >
+            <polygon
+              points={`26,26 ${26 + unfoldT * 124},26 26,${26 + unfoldT * 102}`}
+              fill={THEME.colors.magentaSoft}
+              stroke={THEME.colors.magenta}
+              strokeWidth={2}
+              strokeOpacity={0.42}
+            />
+            <polygon
+              points={`750,26 ${750 - unfoldT * 124},26 750,${26 + unfoldT * 102}`}
+              fill={THEME.colors.cyanSoft}
+              stroke={THEME.colors.cyan}
+              strokeWidth={2}
+              strokeOpacity={0.48}
+            />
+          </svg>
+        )}
+
+        {/* Horizontal guide rail (fades smoothly as pop-up deck opens) */}
+        <div
+          style={{
+            position: "absolute",
+            left: 36,
+            top: slotTopPx - 36,
+            width: 410,
+            height: 72,
+            borderRadius: 18,
+            backgroundColor: THEME.colors.deskRecess,
+            border: `2px solid ${THEME.colors.deskStroke}`,
+            opacity: 1 - unfoldT * 0.92,
+          }}
+        />
+
+        {/* Recessed chamfered make.fun dock slot */}
+        <div
+          style={{
+            position: "absolute",
+            left: "50%",
+            top: slotTopPx,
+            width: 316,
+            height: 170,
+            transform: `translate(-50%, -50%) scale(${slotScale.toFixed(4)})`,
+            borderRadius: 22,
+            backgroundColor: isLocked
+              ? THEME.colors.cyanSoft
+              : THEME.colors.deskRecess,
+            border: `3.5px solid ${isLocked ? THEME.colors.cyan : THEME.colors.magenta}`,
+            boxShadow: "inset 0 6px 14px rgba(25,20,25,0.12)",
+          }}
+        >
+          <div
+            style={{
+              position: "absolute",
+              right: 11,
+              top: 40,
+              width: 13,
+              height: 84,
+              borderRadius: 6,
+              backgroundColor: isLocked
+                ? THEME.colors.cyan
+                : THEME.colors.magenta,
+            }}
+          />
+          {[
+            { left: 13, top: 11 },
+            { right: 13, top: 11 },
+            { left: 13, bottom: 11 },
+            { right: 13, bottom: 11 },
+          ].map((pos, i) => (
+            <div
+              key={i}
+              style={{
+                position: "absolute",
+                ...pos,
+                width: 10,
+                height: 10,
+                borderRadius: 3,
+                backgroundColor: isLocked
+                  ? THEME.colors.cyan
+                  : THEME.colors.deskStroke,
+              }}
+            />
+          ))}
+        </div>
+
+        {/* Cyan lock shockwave ring (f75..84, completely gone before dead-still hold f85..104) */}
+        {frame >= 15 && frame <= 24 && (
+          <div
+            style={{
+              position: "absolute",
+              left: "50%",
+              top: slotTopPx,
+              width: 550,
+              height: 290,
+              borderRadius: 40,
+              border: `5px solid ${THEME.colors.cyan}`,
+              transform: `translate(-50%, -50%) scale(${(0.95 + lockRingT * 0.55).toFixed(4)})`,
+              opacity: clamp01(1 - lockRingT),
+            }}
+          />
+        )}
+      </div>
+
+      {/* Arena circuit rails energizing outward from hub during unfold */}
+      {railDraw > 0.01 && (
+        <svg
+          width={1080}
+          height={1920}
+          viewBox="0 0 1080 1920"
+          style={{
+            position: "absolute",
+            inset: 0,
+            opacity: railDraw,
+            pointerEvents: "none",
+          }}
+        >
+          <path
+            d="M 432 1088 L 314 1088 L 314 786"
+            fill="none"
+            stroke={THEME.colors.magenta}
+            strokeWidth={6}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeDasharray={440}
+            strokeDashoffset={440 * (1 - railDraw)}
+          />
+          <path
+            d="M 648 1088 L 766 1088 L 766 786"
+            fill="none"
+            stroke={THEME.colors.cyan}
+            strokeWidth={6}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeDasharray={440}
+            strokeDashoffset={440 * (1 - railDraw)}
+          />
+          <path
+            d="M 540 1030 L 540 918"
+            fill="none"
+            stroke={THEME.colors.ink}
+            strokeWidth={6}
+            strokeLinecap="round"
+            strokeDasharray={130}
+            strokeDashoffset={130 * (1 - railDraw)}
+          />
+        </svg>
+      )}
+
+      {/* Giant Hero "AI AGENT" Hardware Token */}
+      <AgentToken
+        x={tokenX}
+        y={tokenY}
+        scale={tokenScale}
+        rotateY={tokenRotateY}
+        rotateX={tokenRotateX}
+        elevation={tokenElevation}
+        isLocked={isLocked}
+        mascot="happy"
+      />
+
+      {/* Editorial Hand pushing hero token then retracting before 20f dead-still hold */}
+      {showHand && (
+        <PushingHand
+          tokenLeftX={tokenX - 143 * tokenScale}
+          tokenCenterY={tokenY}
+          scale={1.52}
+          offsetX={handCompress - handExitT * 520}
+          offsetY={-handExitT * 28}
+          opacity={1 - handExitT}
+        />
+      )}
+    </AbsoluteFill>
+  );
+};
+
+// ============================================================================
+// REUSABLE HERO-SIZED ARENA MODULE CARDS (NATIVE 720x460px)
+// Each renders crisp at scale 1.0 (hero spotlight) and scales cleanly into the
+// 3-card fan formation in ARENA & TARUHAN.
+// ============================================================================
+const CARD_W = 720;
+const CARD_H = 460;
+
+// --- MODULE 1: "SOLVER" — SOLVED MAZE VISUAL PROOF ---
+const SolverCard = ({
+  proofFrame,
+  fps,
+  centerX,
+  centerY,
+  scale,
+  lift,
+  rotateY,
+  rotateZ,
+  opacity,
+}: {
+  proofFrame: number; // global frame controlling maze solve animation
+  fps: number;
+  centerX: number;
+  centerY: number;
+  scale: number;
+  lift: number;
+  rotateY: number;
+  rotateZ: number;
+  opacity: number;
+}) => {
+  const pathLen = 1040;
+  const solveT = clampInterp(proofFrame, [150, 162], [0, 1], THEME.ease.inOutCubic);
+  const solvedDone = proofFrame >= 162;
+  const goalBurst = solvedDone
+    ? boundedSpring(proofFrame, 162, fps, THEME.spring.snappy, 10)
+    : 0;
+
+  const shadowScale = scale * (0.97 + lift * 0.004);
+  const shadowY = 18 + lift * 0.75;
+  const shadowBlur = 18 + lift * 0.55;
+  const shadowAlpha = clamp(0.24 - lift * 0.003, 0.1, 0.25);
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: centerX - CARD_W / 2,
+        top: centerY - CARD_H / 2,
+        width: CARD_W,
+        height: CARD_H,
+        opacity,
+      }}
+    >
+      {/* Dynamic grounded contact shadow */}
+      <div
+        style={{
+          position: "absolute",
+          left: 16,
+          right: 16,
+          top: shadowY,
+          bottom: -10,
+          borderRadius: 34,
+          backgroundColor: `rgba(25,20,25,${shadowAlpha.toFixed(3)})`,
+          filter: `blur(${shadowBlur.toFixed(1)}px)`,
+          transform: `rotate(${rotateZ.toFixed(2)}deg) scale(${shadowScale.toFixed(4)})`,
+          transformOrigin: "50% 50%",
+        }}
+      />
+
+      {/* Card chassis */}
+      <div
+        style={{
+          position: "relative",
+          width: "100%",
+          height: "100%",
+          transform: `perspective(1300px) translateY(${(-lift).toFixed(2)}px) rotateY(${rotateY.toFixed(2)}deg) rotateZ(${rotateZ.toFixed(2)}deg) scale(${scale.toFixed(4)})`,
+          transformOrigin: "50% 50%",
+          borderRadius: 32,
+          backgroundColor: THEME.colors.surface,
+          border: `4.5px solid ${THEME.colors.ink}`,
+          overflow: "hidden",
+          display: "flex",
+          flexDirection: "column",
+        }}
+      >
+        {/* Header strip — verbatim "SOLVER" */}
+        <div
+          style={{
+            height: 84,
+            paddingLeft: 28,
+            paddingRight: 28,
+            borderBottom: `2.5px solid ${THEME.colors.lineHair}`,
+            backgroundColor: THEME.colors.surfaceSoft,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+            <div
+              style={{
+                width: 20,
+                height: 20,
+                borderRadius: 4,
+                backgroundColor: THEME.colors.magenta,
+                transform: "rotate(45deg)",
+              }}
+            />
+            <span
+              style={{
+                fontFamily: THEME.font,
+                fontSize: 44,
+                fontWeight: 900,
+                letterSpacing: "0.03em",
+                color: THEME.colors.ink,
+                lineHeight: 1,
+              }}
+            >
+              {COPY.modules.solver}
+            </span>
+          </div>
+          <div
+            style={{
+              width: 24,
+              height: 24,
+              borderRadius: "50%",
+              backgroundColor: solvedDone ? THEME.colors.cyan : THEME.colors.deskSide,
+              border: `3px solid ${THEME.colors.ink}`,
+              transform: solvedDone
+                ? `scale(${(1 + beatPunch(proofFrame, 162, 0.22)).toFixed(3)})`
+                : undefined,
+            }}
+          />
+        </div>
+
+        {/* Hero-sized maze proof canvas */}
+        <div
+          style={{
+            flex: 1,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            backgroundColor: THEME.colors.surface,
+          }}
+        >
+          <svg width={656} height={334} viewBox="0 0 656 334">
+            <rect
+              x={28}
+              y={17}
+              width={600}
+              height={300}
+              rx={20}
+              fill={THEME.colors.bgBase}
+              stroke={THEME.colors.ink}
+              strokeWidth={5}
+            />
+            {[0, 1, 2, 3, 4, 5].map((c) =>
+              [0, 1, 2].map((r) => (
+                <circle
+                  key={`${c}-${r}`}
+                  cx={78 + c * 100}
+                  cy={67 + r * 100}
+                  r={4.5}
+                  fill={THEME.colors.deskStroke}
+                />
+              )),
+            )}
+            {/* Maze walls */}
+            <g
+              stroke={THEME.colors.ink}
+              strokeWidth={8.5}
+              strokeLinecap="round"
+              fill="none"
+            >
+              <line x1={128} y1={117} x2={128} y2={317} />
+              <line x1={228} y1={17} x2={228} y2={117} />
+              <line x1={228} y1={217} x2={228} y2={317} />
+              <line x1={328} y1={117} x2={328} y2={317} />
+              <line x1={428} y1={17} x2={428} y2={217} />
+              <line x1={528} y1={17} x2={528} y2={117} />
+              <line x1={528} y1={217} x2={528} y2={317} />
+              <line x1={28} y1={117} x2={128} y2={117} />
+              <line x1={128} y1={217} x2={328} y2={217} />
+              <line x1={428} y1={117} x2={528} y2={117} />
+            </g>
+
+            <defs>
+              <linearGradient
+                id="solverHeroGrad"
+                x1="0%"
+                y1="0%"
+                x2="100%"
+                y2="100%"
+              >
+                <stop offset="0%" stopColor={THEME.colors.cyan} />
+                <stop offset="100%" stopColor={THEME.colors.magenta} />
+              </linearGradient>
+            </defs>
+
+            {/* Solved orthogonal path (length = 1000px) */}
+            <path
+              d="M 78 67 L 178 67 L 178 167 L 278 167 L 278 67 L 378 67 L 378 267 L 478 267 L 478 167 L 578 167 L 578 267"
+              fill="none"
+              stroke="url(#solverHeroGrad)"
+              strokeWidth={17}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeDasharray={pathLen}
+              strokeDashoffset={pathLen * (1 - solveT)}
+            />
+
+            {/* Start node */}
+            <circle
+              cx={78}
+              cy={67}
+              r={18}
+              fill={THEME.colors.cyan}
+              stroke={THEME.colors.ink}
+              strokeWidth={4.5}
+            />
+
+            {/* Goal confirmation shockwave */}
+            {solvedDone && proofFrame <= 174 && (
+              <circle
+                cx={578}
+                cy={267}
+                r={18 + clamp01(goalBurst) * 32}
+                fill="none"
+                stroke={THEME.colors.magenta}
+                strokeWidth={5}
+                strokeOpacity={clamp01(1 - goalBurst)}
+              />
+            )}
+
+            {/* Goal target box + checkmark */}
+            <rect
+              x={556}
+              y={245}
+              width={44}
+              height={44}
+              rx={11}
+              fill={solvedDone ? THEME.colors.magenta : THEME.colors.surface}
+              stroke={THEME.colors.ink}
+              strokeWidth={4.5}
+            />
+            {solvedDone && (
+              <path
+                d="M 567 267 L 575 275 L 590 259"
+                fill="none"
+                stroke="#FFFFFF"
+                strokeWidth={5.5}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            )}
+          </svg>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// --- MODULE 2: "CSV" — SCANNED & CHECKED ROWS VISUAL PROOF ---
+const CSV_ROW_WIDTHS: readonly (readonly [number, number, number])[] = [
+  [142, 186, 98],
+  [116, 158, 126],
+  [158, 134, 108],
+  [128, 194, 92],
+];
+
+const CsvCard = ({
+  proofFrame,
+  fps,
+  centerX,
+  centerY,
+  scale,
+  lift,
+  rotateY,
+  rotateZ,
+  opacity,
+}: {
+  proofFrame: number; // global frame controlling scan + row checks
+  fps: number;
+  centerX: number;
+  centerY: number;
+  scale: number;
+  lift: number;
+  rotateY: number;
+  rotateZ: number;
+  opacity: number;
+}) => {
+  const scanProgress = clampInterp(
+    proofFrame,
+    [180, 193],
+    [0, 1],
+    THEME.ease.inOutCubic,
+  );
+  const scanActive = proofFrame >= 180 && proofFrame <= 197;
+  const allParsed = proofFrame >= 193;
+
+  const shadowScale = scale * (0.97 + lift * 0.004);
+  const shadowY = 18 + lift * 0.75;
+  const shadowBlur = 18 + lift * 0.55;
+  const shadowAlpha = clamp(0.24 - lift * 0.003, 0.1, 0.25);
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: centerX - CARD_W / 2,
+        top: centerY - CARD_H / 2,
+        width: CARD_W,
+        height: CARD_H,
+        opacity,
+      }}
+    >
+      {/* Dynamic grounded contact shadow */}
+      <div
+        style={{
+          position: "absolute",
+          left: 16,
+          right: 16,
+          top: shadowY,
+          bottom: -10,
+          borderRadius: 34,
+          backgroundColor: `rgba(25,20,25,${shadowAlpha.toFixed(3)})`,
+          filter: `blur(${shadowBlur.toFixed(1)}px)`,
+          transform: `rotate(${rotateZ.toFixed(2)}deg) scale(${shadowScale.toFixed(4)})`,
+          transformOrigin: "50% 50%",
+        }}
+      />
+
+      {/* Card chassis */}
+      <div
+        style={{
+          position: "relative",
+          width: "100%",
+          height: "100%",
+          transform: `perspective(1300px) translateY(${(-lift).toFixed(2)}px) rotateY(${rotateY.toFixed(2)}deg) rotateZ(${rotateZ.toFixed(2)}deg) scale(${scale.toFixed(4)})`,
+          transformOrigin: "50% 50%",
+          borderRadius: 32,
+          backgroundColor: THEME.colors.surface,
+          border: `4.5px solid ${THEME.colors.ink}`,
+          overflow: "hidden",
+          display: "flex",
+          flexDirection: "column",
+        }}
+      >
+        {/* Header strip — verbatim "CSV" */}
+        <div
+          style={{
+            height: 84,
+            paddingLeft: 28,
+            paddingRight: 28,
+            borderBottom: `2.5px solid ${THEME.colors.lineHair}`,
+            backgroundColor: THEME.colors.surfaceSoft,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+            <div
+              style={{
+                width: 22,
+                height: 22,
+                borderRadius: 6,
+                backgroundColor: THEME.colors.cyan,
+                border: `3px solid ${THEME.colors.ink}`,
+              }}
+            />
+            <span
+              style={{
+                fontFamily: THEME.font,
+                fontSize: 44,
+                fontWeight: 900,
+                letterSpacing: "0.03em",
+                color: THEME.colors.ink,
+                lineHeight: 1,
+              }}
+            >
+              {COPY.modules.csv}
+            </span>
+          </div>
+          <div
+            style={{
+              width: 24,
+              height: 24,
+              borderRadius: "50%",
+              backgroundColor: allParsed ? THEME.colors.cyan : THEME.colors.deskSide,
+              border: `3px solid ${THEME.colors.ink}`,
+              transform: allParsed
+                ? `scale(${(1 + beatPunch(proofFrame, 193, 0.22)).toFixed(3)})`
+                : undefined,
+            }}
+          />
+        </div>
+
+        {/* Structured rows body (pure bars + crisp checkmarks, zero extra text) */}
+        <div
+          style={{
+            position: "relative",
+            flex: 1,
+            padding: "24px 28px",
+            display: "flex",
+            flexDirection: "column",
+            justifyContent: "space-between",
+          }}
+        >
+          {/* Vertical column dividers */}
+          <div
+            style={{
+              position: "absolute",
+              left: 226,
+              top: 22,
+              bottom: 22,
+              width: 2,
+              backgroundColor: THEME.colors.lineHair,
+            }}
+          />
+          <div
+            style={{
+              position: "absolute",
+              left: 448,
+              top: 22,
+              bottom: 22,
+              width: 2,
+              backgroundColor: THEME.colors.lineHair,
+            }}
+          />
+
+          {CSV_ROW_WIDTHS.map((widths, rowIdx) => {
+            const rowStart = 181 + rowIdx * 3;
+            const rowPop = boundedSpring(
+              proofFrame,
+              rowStart,
+              fps,
+              THEME.spring.punch,
+              7,
+            );
+            const isParsed = proofFrame >= rowStart + 2;
+            const rowScale = 0.94 + rowPop * 0.06;
+            return (
+              <div
+                key={rowIdx}
+                style={{
+                  position: "relative",
+                  height: 68,
+                  borderRadius: 16,
+                  paddingLeft: 18,
+                  paddingRight: 18,
+                  backgroundColor: isParsed ? THEME.colors.bgBase : "#FBF9FD",
+                  border: `3px solid ${isParsed ? THEME.colors.ink : THEME.colors.lineHair}`,
+                  boxShadow: isParsed
+                    ? "0 5px 0 rgba(25,20,25,0.10)"
+                    : "none",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  transform: `scale(${rowScale.toFixed(4)})`,
+                }}
+              >
+                <div style={{ width: 176, display: "flex", alignItems: "center" }}>
+                  <div
+                    style={{
+                      width: widths[0],
+                      height: 20,
+                      borderRadius: 10,
+                      backgroundColor: isParsed
+                        ? THEME.colors.magenta
+                        : THEME.colors.deskSide,
+                    }}
+                  />
+                </div>
+                <div style={{ width: 208, display: "flex", alignItems: "center" }}>
+                  <div
+                    style={{
+                      width: widths[1],
+                      height: 20,
+                      borderRadius: 10,
+                      backgroundColor: isParsed
+                        ? THEME.colors.ink
+                        : THEME.colors.deskSide,
+                    }}
+                  />
+                </div>
+                <div style={{ width: 140, display: "flex", alignItems: "center" }}>
+                  <div
+                    style={{
+                      width: widths[2],
+                      height: 20,
+                      borderRadius: 10,
+                      backgroundColor: isParsed
+                        ? THEME.colors.cyan
+                        : THEME.colors.deskSide,
+                    }}
+                  />
+                </div>
+                <div
+                  style={{
+                    width: 34,
+                    height: 34,
+                    borderRadius: "50%",
+                    backgroundColor: isParsed
+                      ? THEME.colors.cyan
+                      : THEME.colors.deskSide,
+                    border: `3px solid ${THEME.colors.ink}`,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    flexShrink: 0,
+                  }}
+                >
+                  {isParsed && (
+                    <svg width={18} height={18} viewBox="0 0 18 18">
+                      <path
+                        d="M 3.5 9.2 L 7.4 13 L 14.5 5.2"
+                        fill="none"
+                        stroke={THEME.colors.ink}
+                        strokeWidth={3}
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+
+          {/* Sweeping cyan scan beam */}
+          {scanActive && (
+            <div
+              style={{
+                position: "absolute",
+                left: 20,
+                right: 20,
+                top: 22 + scanProgress * 314,
+                height: 7,
+                borderRadius: 4,
+                backgroundColor: THEME.colors.cyan,
+                boxShadow: "0 0 20px rgba(34,211,238,0.85)",
+                opacity: clampInterp(
+                  proofFrame,
+                  [193, 197],
+                  [1, 0],
+                  THEME.ease.outCubic,
+                ),
+              }}
+            />
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// --- MODULE 3: "TINY VM" — STACKED VM BLOCKS VISUAL PROOF ---
+const VM_STACK_BLOCKS: readonly {
+  bay: number;
+  slot: number;
+  color: string;
+  accent: string;
+  delay: number;
+}[] = [
+  { bay: 0, slot: 0, color: THEME.colors.ink, accent: THEME.colors.cyan, delay: 210 },
+  { bay: 0, slot: 1, color: THEME.colors.surfaceSoft, accent: THEME.colors.magenta, delay: 212 },
+  { bay: 1, slot: 0, color: THEME.colors.magenta, accent: "#FFFFFF", delay: 213 },
+  { bay: 1, slot: 1, color: THEME.colors.ink, accent: THEME.colors.cyan, delay: 215 },
+  { bay: 2, slot: 0, color: THEME.colors.cyan, accent: THEME.colors.ink, delay: 216 },
+  { bay: 2, slot: 1, color: THEME.colors.surface, accent: THEME.colors.magenta, delay: 218 },
+];
+
+const TinyVmCard = ({
+  proofFrame,
+  fps,
+  centerX,
+  centerY,
+  scale,
+  lift,
+  rotateX,
+  opacity,
+}: {
+  proofFrame: number; // global frame controlling block stacking
+  fps: number;
+  centerX: number;
+  centerY: number;
+  scale: number;
+  lift: number;
+  rotateX: number;
+  opacity: number;
+}) => {
+  const busActive = clampInterp(
+    proofFrame,
+    [217, 223],
+    [0, 1],
+    THEME.ease.outCubic,
+  );
+  const vmReady = proofFrame >= 223;
+
+  const shadowScale = scale * (0.97 + lift * 0.004);
+  const shadowY = 20 + lift * 0.75;
+  const shadowBlur = 20 + lift * 0.55;
+  const shadowAlpha = clamp(0.26 - lift * 0.003, 0.12, 0.28);
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: centerX - CARD_W / 2,
+        top: centerY - CARD_H / 2,
+        width: CARD_W,
+        height: CARD_H,
+        opacity,
+      }}
+    >
+      {/* Dynamic grounded contact shadow */}
+      <div
+        style={{
+          position: "absolute",
+          left: 16,
+          right: 16,
+          top: shadowY,
+          bottom: -10,
+          borderRadius: 34,
+          backgroundColor: `rgba(25,20,25,${shadowAlpha.toFixed(3)})`,
+          filter: `blur(${shadowBlur.toFixed(1)}px)`,
+          transform: `scale(${shadowScale.toFixed(4)})`,
+          transformOrigin: "50% 50%",
+        }}
+      />
+
+      {/* Card chassis */}
+      <div
+        style={{
+          position: "relative",
+          width: "100%",
+          height: "100%",
+          transform: `perspective(1300px) translateY(${(-lift).toFixed(2)}px) rotateX(${rotateX.toFixed(2)}deg) scale(${scale.toFixed(4)})`,
+          transformOrigin: "50% 50%",
+          borderRadius: 32,
+          backgroundColor: THEME.colors.surface,
+          border: `4.5px solid ${THEME.colors.ink}`,
+          overflow: "hidden",
+          display: "flex",
+          flexDirection: "column",
+        }}
+      >
+        {/* Header strip — verbatim "TINY VM" */}
+        <div
+          style={{
+            height: 84,
+            paddingLeft: 28,
+            paddingRight: 28,
+            borderBottom: `2.5px solid ${THEME.colors.lineHair}`,
+            backgroundColor: THEME.colors.surfaceSoft,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+            <div style={{ display: "flex", gap: 4 }}>
+              <div
+                style={{
+                  width: 12,
+                  height: 22,
+                  borderRadius: 3,
+                  backgroundColor: THEME.colors.ink,
+                }}
+              />
+              <div
+                style={{
+                  width: 12,
+                  height: 22,
+                  borderRadius: 3,
+                  backgroundColor: THEME.colors.magenta,
+                }}
+              />
+            </div>
+            <span
+              style={{
+                fontFamily: THEME.font,
+                fontSize: 44,
+                fontWeight: 900,
+                letterSpacing: "0.03em",
+                color: THEME.colors.ink,
+                lineHeight: 1,
+              }}
+            >
+              {COPY.modules.vm}
+            </span>
+          </div>
+          <div
+            style={{
+              width: 24,
+              height: 24,
+              borderRadius: "50%",
+              backgroundColor: vmReady ? THEME.colors.cyan : THEME.colors.deskSide,
+              border: `3px solid ${THEME.colors.ink}`,
+              transform: vmReady
+                ? `scale(${(1 + beatPunch(proofFrame, 223, 0.22)).toFixed(3)})`
+                : undefined,
+            }}
+          />
+        </div>
+
+        {/* 3-bay hardware VM stack rack */}
+        <div
+          style={{
+            position: "relative",
+            flex: 1,
+            padding: "28px 30px",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+          }}
+        >
+          {[0, 1, 2].map((bayIdx) => {
+            const bayBlocks = VM_STACK_BLOCKS.filter((b) => b.bay === bayIdx);
+            return (
+              <div
+                key={bayIdx}
+                style={{
+                  position: "relative",
+                  width: 190,
+                  height: 294,
+                  borderRadius: 22,
+                  backgroundColor: THEME.colors.bgBase,
+                  border: `3px dashed ${THEME.colors.deskStroke}`,
+                  padding: 16,
+                  display: "flex",
+                  flexDirection: "column-reverse",
+                  gap: 16,
+                }}
+              >
+                {bayBlocks.map((block) => {
+                  const p = boundedSpring(
+                    proofFrame,
+                    block.delay,
+                    fps,
+                    THEME.spring.punch,
+                    8,
+                  );
+                  const dropY = (1 - p) * -78;
+                  const blockScale = 0.82 + p * 0.18;
+                  const bShadowY = 6 + Math.max(0, 1 - p) * 12;
+                  const bShadowAlpha = clamp(
+                    0.2 - Math.max(0, 1 - p) * 0.11,
+                    0.05,
+                    0.22,
+                  );
+
+                  return (
+                    <div
+                      key={`${block.bay}-${block.slot}`}
+                      style={{
+                        height: 112,
+                        borderRadius: 16,
+                        backgroundColor: block.color,
+                        border: `3.5px solid ${THEME.colors.ink}`,
+                        boxShadow: `0 ${bShadowY.toFixed(1)}px ${Math.max(0, (1 - p) * 12).toFixed(1)}px rgba(25,20,25,${bShadowAlpha.toFixed(3)})`,
+                        opacity: clamp01(p * 1.5),
+                        transform: `translateY(${dropY.toFixed(2)}px) scale(${blockScale.toFixed(4)})`,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        paddingLeft: 20,
+                        paddingRight: 20,
+                      }}
+                    >
+                      <div style={{ display: "flex", gap: 9 }}>
+                        <div
+                          style={{
+                            width: 44,
+                            height: 13,
+                            borderRadius: 6.5,
+                            backgroundColor: block.accent,
+                          }}
+                        />
+                        <div
+                          style={{
+                            width: 18,
+                            height: 13,
+                            borderRadius: 6.5,
+                            backgroundColor: block.accent,
+                            opacity: 0.55,
+                          }}
+                        />
+                      </div>
+                      <div
+                        style={{
+                          width: 20,
+                          height: 20,
+                          borderRadius: 5,
+                          backgroundColor: block.accent,
+                        }}
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })}
+
+          {/* Inter-bay execution bus arrows */}
+          {[223, 455].map((arrowLeft, idx) => (
+            <svg
+              key={idx}
+              width={42}
+              height={36}
+              viewBox="0 0 42 36"
+              style={{
+                position: "absolute",
+                left: arrowLeft,
+                top: "50%",
+                transform: "translateY(-50%)",
+              }}
+            >
+              <path
+                d="M 4 18 L 32 18 M 24 9 L 34 18 L 24 27"
+                fill="none"
+                stroke={
+                  busActive > 0.35 ? THEME.colors.cyan : THEME.colors.deskStroke
+                }
+                strokeWidth={5.5}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeDasharray={52}
+                strokeDashoffset={
+                  52 * (1 - clamp01(busActive * 1.2 - idx * 0.2))
+                }
+              />
+            </svg>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ============================================================================
+// BEAT 3: ARENA (f135..239) — ONE-BY-ONE HERO MODULES -> 3-CARD FAN FORMATION
+// - SOLVER (f150): Horizontal whip-glide from left edge -> hero-sized maze solve -> left fan wing
+// - CSV (f180): Diagonal pendulum swing from upper-right -> hero-sized row scan -> right fan wing
+// - TINY VM (f210): Vertical pop-up flip from bottom -> hero-sized block stack -> center-front apex
+// Three distinct entrances & animations; straight (0deg) while read; max |rotateY| = 24deg.
+// ============================================================================
+const ArenaBeat = () => {
+  const localFrame = useCurrentFrame(); // local 0..104 == global 135..239
+  const globalFrame = BEATS.arenaStart + localFrame;
+  const { fps } = useVideoConfig();
+
+  // Blur-zoom cut IN (local 0..4) & OUT (local 101..104)
+  const cutInT = clampInterp(localFrame, [0, 4], [0, 1], THEME.ease.outCubic);
+  const cutOutT = clampInterp(localFrame, [101, 104], [0, 1], THEME.ease.inCubic);
+  const cutScale = (0.84 + cutInT * 0.16) * (1 + cutOutT * 0.26);
+  const cutBlur = (1 - cutInT) * 9 + cutOutT * 9;
+  const cutOpacity = (0.25 + cutInT * 0.75) * (1 - cutOutT);
+
+  // Subtle rhythmic board punch on module landings (f150, f180, f210)
+  const boardPunch =
+    beatPunch(globalFrame, BEATS.solverHit, 0.015) +
+    beatPunch(globalFrame, BEATS.csvHit, 0.015) +
+    beatPunch(globalFrame, BEATS.vmHit, 0.015);
+
+  // --- 1. SOLVER (Distinct Entrance #1: Left-Edge Horizontal Whip-Glide, f144..152 = 8f) ---
+  const solverInPos = clampInterp(globalFrame, [144, 152], [0, 1], THEME.ease.snapOut);
+  const solverInPop = boundedSpring(globalFrame, 144, fps, THEME.spring.modulePop, 9);
+  const solverYawIn = clampInterp(globalFrame, [144, 150], [24, 0], THEME.ease.outCubic);
+  const solverFanT = clampInterp(globalFrame, [172, 180], [0, 1], THEME.ease.inOutCubic);
+
+  const solverX =
+    -420 + solverInPos * (540 - -420) + solverFanT * (314 - 540);
+  const solverY = 710 + solverFanT * (668 - 710);
+  const solverScale =
+    (0.8 + solverInPop * 0.2) * (1 - solverFanT * 0.52); // 1.00 hero -> 0.48 fan wing
+  const solverLift =
+    Math.sin(
+      clampInterp(globalFrame, [144, 152], [0, Math.PI], THEME.ease.inOutSin),
+    ) *
+      22 +
+    beatPunch(globalFrame, BEATS.solverHit, 6);
+  const solverRotateY = clamp(solverYawIn + solverFanT * 15, 0, 24); // 24 -> 0 (read!) -> +15
+  const solverRotateZ = solverFanT * -6;
+
+  // --- 2. CSV (Distinct Entrance #2: Upper-Right Diagonal Pendulum Swing-In, f174..182 = 8f) ---
+  const csvInPos = clampInterp(globalFrame, [174, 182], [0, 1], THEME.ease.snapOut);
+  const csvInPop = boundedSpring(globalFrame, 174, fps, THEME.spring.modulePop, 9);
+  const csvYawIn = clampInterp(globalFrame, [174, 180], [-24, 0], THEME.ease.outCubic);
+  const csvRollIn = clampInterp(globalFrame, [174, 181], [11, 0], THEME.ease.outCubic);
+  const csvFanT = clampInterp(globalFrame, [202, 210], [0, 1], THEME.ease.inOutCubic);
+
+  const csvX =
+    1460 + csvInPos * (540 - 1460) + csvFanT * (766 - 540);
+  const csvY =
+    490 + csvInPos * (710 - 490) + csvFanT * (668 - 710);
+  const csvScale =
+    (0.74 + csvInPop * 0.26) * (1 - csvFanT * 0.52); // 1.00 hero -> 0.48 fan wing
+  const csvLift =
+    Math.sin(
+      clampInterp(globalFrame, [174, 182], [0, Math.PI], THEME.ease.inOutSin),
+    ) *
+      34 +
+    beatPunch(globalFrame, BEATS.csvHit, 6);
+  const csvRotateY = clamp(csvYawIn - csvFanT * 15, -24, 0); // -24 -> 0 (read!) -> -15
+  const csvRotateZ = csvRollIn + csvFanT * 6;
+
+  // --- 3. TINY VM (Distinct Entrance #3: Bottom-Edge Pop-Up Flip-Rise, f204..212 = 8f) ---
+  const vmInPos = clampInterp(globalFrame, [204, 212], [0, 1], THEME.ease.snapOut);
+  const vmInPop = boundedSpring(globalFrame, 204, fps, THEME.spring.modulePop, 9);
+  const vmPitchIn = clampInterp(globalFrame, [204, 210], [26, 0], THEME.ease.outCubic);
+  const vmFanT = clampInterp(globalFrame, [228, 235], [0, 1], THEME.ease.inOutCubic);
+
+  const vmX = 540;
+  const vmY = 1480 + vmInPos * (710 - 1480) + vmFanT * (796 - 710);
+  const vmScale =
+    (0.78 + vmInPop * 0.22) * (1 - vmFanT * 0.46); // 1.00 hero -> 0.54 front apex
+  const vmLift =
+    Math.sin(
+      clampInterp(globalFrame, [204, 212], [0, Math.PI], THEME.ease.inOutSin),
+    ) *
+      28 +
+    beatPunch(globalFrame, BEATS.vmHit, 6);
+  const vmRotateX = clamp(vmPitchIn, 0, 26);
+
+  // Subtle depth dimming on already-settled wing cards while another module is hero-sized,
+  // snapping back to 1.0 as all 3 lock into the completed fan formation (f228..235).
+  const wingFocusReturn = clampInterp(globalFrame, [228, 234], [0, 1], THEME.ease.outCubic);
+  const solverDim =
+    globalFrame >= 174 && globalFrame < 234
+      ? 1 - 0.18 * (1 - wingFocusReturn)
+      : 1;
+  const csvDim =
+    globalFrame >= 204 && globalFrame < 234
+      ? 1 - 0.18 * (1 - wingFocusReturn)
+      : 1;
+
+  // Token hub micro-pulse as each module connects
+  const tokenPulse =
+    1 +
+    beatPunch(globalFrame, BEATS.solverHit, 0.04) +
+    beatPunch(globalFrame, BEATS.csvHit, 0.04) +
+    beatPunch(globalFrame, BEATS.vmHit, 0.045);
+
+  return (
+    <AbsoluteFill
+      style={{
+        opacity: cutOpacity,
+        transform: `scale(${(cutScale + boardPunch).toFixed(4)})`,
+        transformOrigin: "540px 830px",
+        filter: cutBlur > 0.15 ? `blur(${cutBlur.toFixed(1)}px)` : undefined,
+      }}
+    >
+      {/* Unfolded Pop-Up Book Arena Floor Deck (clean light surface inside safe zone) */}
+      <div
+        style={{
+          position: "absolute",
+          left: 152,
+          top: 462,
+          width: 776,
+          height: 736,
+          borderRadius: 32,
+          backgroundColor: THEME.colors.deskTop,
+          border: `3.5px solid ${THEME.colors.ink}`,
+          boxShadow: "0 14px 0 #DDD4E8, 0 28px 46px rgba(25,20,25,0.11)",
+          transform: "perspective(1400px) rotateX(4deg)",
+          transformOrigin: "50% 55%",
+          overflow: "hidden",
+        }}
+      >
+        <div
+          style={{
+            position: "absolute",
+            left: 0,
+            right: 0,
+            top: "50%",
+            height: 2,
+            backgroundColor: THEME.colors.deskStroke,
+            opacity: 0.65,
+          }}
+        />
+        <div
+          style={{
+            position: "absolute",
+            left: "50%",
+            top: 0,
+            bottom: 0,
+            width: 2,
+            backgroundColor: THEME.colors.deskStroke,
+            opacity: 0.55,
+          }}
+        />
+        {/* Recessed hub dock surrounding locked token */}
+        <div
+          style={{
+            position: "absolute",
+            left: "50%",
+            top: 634,
+            width: 296,
+            height: 156,
+            transform: "translate(-50%, -50%)",
+            borderRadius: 22,
+            backgroundColor: THEME.colors.cyanSoft,
+            border: `3px solid ${THEME.colors.cyan}`,
+            boxShadow: "inset 0 5px 12px rgba(25,20,25,0.10)",
+          }}
+        />
+      </div>
+
+      {/* Circuit rails linking token hub to all 3 fan positions */}
+      <svg
+        width={1080}
+        height={1920}
+        viewBox="0 0 1080 1920"
+        style={{ position: "absolute", inset: 0, pointerEvents: "none" }}
+      >
+        <path
+          d="M 432 1088 L 314 1088 L 314 786"
+          fill="none"
+          stroke={
+            globalFrame >= 150 ? THEME.colors.magenta : THEME.colors.deskStroke
+          }
+          strokeWidth={6}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+        <path
+          d="M 648 1088 L 766 1088 L 766 786"
+          fill="none"
+          stroke={
+            globalFrame >= 180 ? THEME.colors.cyan : THEME.colors.deskStroke
+          }
+          strokeWidth={6}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+        <path
+          d="M 540 1030 L 540 918"
+          fill="none"
+          stroke={
+            globalFrame >= 210 ? THEME.colors.ink : THEME.colors.deskStroke
+          }
+          strokeWidth={6}
+          strokeLinecap="round"
+        />
+      </svg>
+
+      {/* Anchored "AI AGENT" Token Hub (visual thread carrying mascot-tilt-play.svg) */}
+      <AgentToken
+        x={540}
+        y={1096}
+        scale={0.9 * tokenPulse}
+        rotateY={0}
+        rotateX={2}
+        elevation={8}
+        isLocked={true}
+        mascot="play"
+      />
+
+      {/* Module 1: SOLVER (Left Fan Wing after hero spotlight f150..172) */}
+      {globalFrame >= 144 && (
+        <SolverCard
+          proofFrame={globalFrame}
+          fps={fps}
+          centerX={solverX}
+          centerY={solverY}
+          scale={solverScale}
+          lift={solverLift}
+          rotateY={solverRotateY}
+          rotateZ={solverRotateZ}
+          opacity={clamp01(solverInPop * 1.8) * solverDim}
+        />
+      )}
+
+      {/* Module 2: CSV (Right Fan Wing after hero spotlight f180..202) */}
+      {globalFrame >= 174 && (
+        <CsvCard
+          proofFrame={globalFrame}
+          fps={fps}
+          centerX={csvX}
+          centerY={csvY}
+          scale={csvScale}
+          lift={csvLift}
+          rotateY={csvRotateY}
+          rotateZ={csvRotateZ}
+          opacity={clamp01(csvInPop * 1.8) * csvDim}
+        />
+      )}
+
+      {/* Module 3: TINY VM (Center-Front Apex overlapping wing edges with real depth occlusion) */}
+      {globalFrame >= 204 && (
+        <TinyVmCard
+          proofFrame={globalFrame}
+          fps={fps}
+          centerX={vmX}
+          centerY={vmY}
+          scale={vmScale}
+          lift={vmLift}
+          rotateX={vmRotateX}
+          opacity={clamp01(vmInPop * 1.8)}
+        />
+      )}
+    </AbsoluteFill>
+  );
+};
+
+// ============================================================================
+// BEAT 4: TARUHAN (f240..314) — HERO PUSH-IN + "$500 PRIZE POOL" SLAM
+// - "$500 PRIZE POOL" slam scale-punch STARTS f242..248 (within f240-248!),
+//   finishes 100% sharp & dead-still at f258 (<= f262!), facing camera (0deg).
+// - Hero push-in with 3-layer parallax (0.4x deck / 0.75x fanned modules / 1.25x token)
+//   settles & parks dead-still f258..309.
+// - 4-frame blur-zoom cut OUT (f310..314) clears arena completely before PUNCHLINE f315.
+// ============================================================================
+const TaruhanBeat = () => {
+  const frame = useCurrentFrame(); // local 0..74 == global 240..314
+  const { fps } = useVideoConfig();
+
+  const words = COPY.stakes.split(" "); // ["$500", "PRIZE", "POOL"]
+  const amountWord = words[0]; // "$500"
+  const prizeWord = words[1]; // "PRIZE"
+  const poolWord = words[2]; // "POOL"
+
+  // Arena backdrop blur-zoom cut IN (local 0..3 == f240..243, zero double-blur on headline!)
+  const arenaCutIn = clampInterp(frame, [0, 3], [0, 1], THEME.ease.outCubic);
+  const arenaInBlur = (1 - arenaCutIn) * 8;
+
+  // Whole-beat blur-zoom cut OUT into PUNCHLINE (local 70..74 == f310..314)
+  const cutOut = clampInterp(frame, [70, 74], [0, 1], THEME.ease.inCubic);
+  const outScale = 1 + cutOut * 0.34;
+  const outBlur = cutOut * 11;
+  const outOpacity = 1 - cutOut;
+
+  // Short crisp hero dolly push-in (local 0..18 == f240..258), 100% PARKED f258..309!
+  const pushT = clampInterp(frame, [0, 18], [0, 1], THEME.ease.popUp);
+
+  // 3-layer parallax transforms (all frozen exact at local >= 18 == global f258 <= f262!)
+  const bgScale = 0.9 + pushT * 0.1; // 0.90 -> 1.00
+  const bgTranslateY = (1 - pushT) * 24;
+  const midScale = 0.91 + pushT * 0.09; // 0.91 -> 1.00
+  const fgTokenScale = 0.96 + pushT * 0.18; // 0.96 -> 1.14
+  const fgTokenY = 1152 - pushT * 18; // 1152 -> 1134 (strictly inside y1248!)
+  const fgTokenElevation = 10 + pushT * 14; // 10 -> 24
+  const fgBracketOffset = (1 - pushT) * 24;
+
+  // Headline divider & glow finish by local 18 (global f258 <= f262!)
+  const barProgress = clampInterp(frame, [10, 18], [0, 1], THEME.ease.outCubic);
+  const amountGlow = clampInterp(frame, [2, 14], [0, 0.24], THEME.ease.outCubic);
+
+  return (
+    <AbsoluteFill
+      style={{
+        opacity: outOpacity,
+        transform: outScale !== 1 ? `scale(${outScale.toFixed(4)})` : undefined,
+        transformOrigin: "540px 840px",
+        filter: outBlur > 0.15 ? `blur(${outBlur.toFixed(1)}px)` : undefined,
+      }}
+    >
+      {/* HERO PUSH-IN ARENA STAGE (y740..1220, clear below "$500 PRIZE POOL") */}
+      <AbsoluteFill
+        style={{
+          filter:
+            arenaInBlur > 0.15 ? `blur(${arenaInBlur.toFixed(1)}px)` : undefined,
+        }}
+      >
+        {/* LAYER 1 (BACKGROUND, 0.4x PARALLAX): ARENA DECK */}
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            transform: `translateY(${bgTranslateY.toFixed(2)}px) scale(${bgScale.toFixed(4)})`,
+            transformOrigin: "540px 976px",
+          }}
+        >
+          <div
+            style={{
+              position: "absolute",
+              left: 162,
+              top: 760,
+              width: 756,
+              height: 448,
+              borderRadius: 34,
+              backgroundColor: "rgba(25,20,25,0.13)",
+              filter: "blur(22px)",
+            }}
+          />
+          <div
+            style={{
+              position: "absolute",
+              left: 156,
+              top: 744,
+              width: 768,
+              height: 454,
+              borderRadius: 30,
+              backgroundColor: THEME.colors.deskTop,
+              border: `3.5px solid ${THEME.colors.ink}`,
+              boxShadow: "0 12px 0 #DDD4E8",
+              transform: "perspective(1400px) rotateX(6deg) rotateY(-3deg)",
+              transformOrigin: "50% 55%",
+              overflow: "hidden",
+            }}
+          >
+            <div
+              style={{
+                position: "absolute",
+                left: 0,
+                right: 0,
+                top: "50%",
+                height: 2,
+                backgroundColor: THEME.colors.deskStroke,
+                opacity: 0.6,
+              }}
+            />
+            <div
+              style={{
+                position: "absolute",
+                left: "50%",
+                top: 0,
+                bottom: 0,
+                width: 2,
+                backgroundColor: THEME.colors.deskStroke,
+                opacity: 0.5,
+              }}
+            />
+          </div>
+        </div>
+
+        {/* LAYER 2 (MIDGROUND, 0.75x PARALLAX): 3 FANNED SOLVED MODULES (max |rotateY| = 16deg) */}
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            transform: `scale(${midScale.toFixed(4)})`,
+            transformOrigin: "540px 940px",
+          }}
+        >
+          <SolverCard
+            proofFrame={235}
+            fps={fps}
+            centerX={314}
+            centerY={882}
+            scale={0.43}
+            lift={8}
+            rotateY={16}
+            rotateZ={-7}
+            opacity={1}
+          />
+          <CsvCard
+            proofFrame={235}
+            fps={fps}
+            centerX={766}
+            centerY={882}
+            scale={0.43}
+            lift={8}
+            rotateY={-16}
+            rotateZ={7}
+            opacity={1}
+          />
+          <TinyVmCard
+            proofFrame={235}
+            fps={fps}
+            centerX={540}
+            centerY={948}
+            scale={0.48}
+            lift={14}
+            rotateX={0}
+            opacity={1}
+          />
+        </div>
+
+        {/* LAYER 3 (FOREGROUND, 1.25x PARALLAX): HERO "AI AGENT" TOKEN (mascot-full-play.svg) */}
+        <AgentToken
+          x={540}
+          y={fgTokenY}
+          scale={fgTokenScale}
+          rotateY={-7}
+          rotateX={0}
+          elevation={fgTokenElevation}
+          isLocked={true}
+          mascot="full"
+        />
+
+        {/* Foreground precision corner framing brackets (1.35x parallax) */}
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            opacity: pushT * 0.92,
+            pointerEvents: "none",
+          }}
+        >
+          <div
+            style={{
+              position: "absolute",
+              left: 142 + fgBracketOffset,
+              top: 734 + fgBracketOffset * 0.4,
+              width: 36,
+              height: 36,
+              borderTop: `5px solid ${THEME.colors.magenta}`,
+              borderLeft: `5px solid ${THEME.colors.magenta}`,
+              borderTopLeftRadius: 8,
+            }}
+          />
+          <div
+            style={{
+              position: "absolute",
+              right: 142 + fgBracketOffset,
+              top: 1184 - fgBracketOffset * 0.4,
+              width: 36,
+              height: 36,
+              borderBottom: `5px solid ${THEME.colors.cyan}`,
+              borderRight: `5px solid ${THEME.colors.cyan}`,
+              borderBottomRightRadius: 8,
+            }}
+          />
+        </div>
+      </AbsoluteFill>
+
+      {/* CAMERA-FACING SEPARATE HEADLINE: "$500 PRIZE POOL" (y434..710, zero 3D tilt)
+          Starts slamming at local 2 (global f242); 100% sharp & dead-still at local 18 (global f258 <= f262!) */}
+      <div
+        style={{
+          position: "absolute",
+          left: 124,
+          top: 434,
+          width: 832,
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          textAlign: "center",
+        }}
+      >
+        {/* Line 1: "$500" — starts global f242, settled global f252 (10f slam overshoot) */}
+        <div style={{ display: "flex", justifyContent: "center" }}>
+          <KineticWord
+            frame={frame}
+            fps={fps}
+            start={2}
+            settleDuration={10}
+            blurDuration={4}
+            blurFrom={14}
+            slideY={-22}
+            scaleFrom={1.44}
+            springConfig={THEME.spring.slam}
+            text={amountWord}
+            glowOpacity={amountGlow}
+            style={{
+              fontSize: 162,
+              fontWeight: 900,
+              lineHeight: 0.92,
+              letterSpacing: "-0.045em",
+              color: THEME.colors.magenta,
+              fontVariantNumeric: "tabular-nums",
+            }}
+          />
+        </div>
+
+        {/* Line 2: "PRIZE POOL" — starts global f246 & f248, settled global f256 & f258 (<= f262!) */}
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "center",
+            alignItems: "baseline",
+            columnGap: 24,
+            marginTop: 4,
+          }}
+        >
+          <KineticWord
+            frame={frame}
+            fps={fps}
+            start={6}
+            settleDuration={10}
+            blurDuration={4}
+            blurFrom={12}
+            slideY={26}
+            scaleFrom={1.34}
+            springConfig={THEME.spring.slam}
+            text={prizeWord}
+            style={{
+              fontSize: 112,
+              fontWeight: 900,
+              lineHeight: 0.94,
+              letterSpacing: "-0.04em",
+              color: THEME.colors.ink,
+            }}
+          />
+          <KineticWord
+            frame={frame}
+            fps={fps}
+            start={8}
+            settleDuration={10}
+            blurDuration={4}
+            blurFrom={12}
+            slideY={26}
+            scaleFrom={1.34}
+            springConfig={THEME.spring.slam}
+            text={poolWord}
+            style={{
+              fontSize: 112,
+              fontWeight: 900,
+              lineHeight: 0.94,
+              letterSpacing: "-0.04em",
+              color: THEME.colors.ink,
+            }}
+          />
+        </div>
+
+        {/* Accent rule — locked by local 18 (global f258 <= f262) */}
+        <div
+          style={{
+            marginTop: 12,
+            width: 320,
+            height: 7,
+            borderRadius: 4,
+            background: `linear-gradient(90deg, ${THEME.colors.magenta} 0%, ${THEME.colors.cyan} 100%)`,
+            transform: `scaleX(${barProgress.toFixed(4)})`,
+            transformOrigin: "50% 50%",
+          }}
+        />
+      </div>
+    </AbsoluteFill>
+  );
+};
+
+// ============================================================================
+// BEAT 5: PUNCHLINE (f315..374) — FULL-SCREEN "Enter your AI agent on make.fun."
+// Arena completely unmounted since f315. Zero competing visuals or labels.
+// All 6 words + glow + horizon rule settle exact at local 14 (global f329) ->
+// 100% DEAD-STILL & RAZOR-SHARP across ALL of global f330..374!
+// Safe zone x124..956, y590..1055.
+// ============================================================================
+const PunchlineBeat = () => {
+  const frame = useCurrentFrame(); // local 0..59 == global 315..374
+  const { fps } = useVideoConfig();
+
+  const words = COPY.punchline.split(" "); // ["Enter", "your", "AI", "agent", "on", "make.fun."]
+  const brandWordRaw = words[5]; // "make.fun."
+  const brandCore = brandWordRaw.slice(0, brandWordRaw.length - 1); // "make.fun"
+  const brandDot = brandWordRaw.slice(brandWordRaw.length - 1); // "."
+
+  // Crisp cut-in zoom settle local 0..5 (exact 1.0 by global f320)
+  const enterZoom = clampInterp(frame, [0, 5], [0.92, 1], THEME.ease.outCubic);
+  const enterOpacity = clampInterp(frame, [0, 3], [0.3, 1], THEME.ease.outCubic);
+
+  // Horizon accent & single calm CTA glow finish by local 14 (global f329 -> frozen f330..374)
+  const horizonScale = clampInterp(frame, [6, 14], [0, 1], THEME.ease.outCubic);
+  const brandGlow = clampInterp(frame, [7, 14], [0, 0.22], THEME.ease.outCubic);
+
+  return (
+    <AbsoluteFill
+      style={{
+        opacity: enterOpacity,
+        transform:
+          enterZoom !== 1 ? `scale(${enterZoom.toFixed(4)})` : undefined,
+        transformOrigin: "540px 815px",
+      }}
+    >
+      <div
+        style={{
+          position: "absolute",
+          left: 124,
+          top: 590,
+          width: 832,
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          textAlign: "center",
+          gap: 10,
+        }}
+      >
+        {/* Line 1: "Enter your" (local 0..8 & 1..9) */}
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "center",
+            alignItems: "baseline",
+            columnGap: 26,
+          }}
+        >
+          <KineticWord
+            frame={frame}
+            fps={fps}
+            start={0}
+            settleDuration={8}
+            blurDuration={4}
+            blurFrom={14}
+            slideY={40}
+            scaleFrom={0.7}
+            text={words[0]}
+            style={{
+              fontSize: 124,
+              fontWeight: 800,
+              lineHeight: 0.96,
+              letterSpacing: "-0.04em",
+              color: THEME.colors.ink,
+            }}
+          />
+          <KineticWord
+            frame={frame}
+            fps={fps}
+            start={1}
+            settleDuration={8}
+            blurDuration={4}
+            blurFrom={14}
+            slideY={40}
+            scaleFrom={0.7}
+            text={words[1]}
+            style={{
+              fontSize: 124,
+              fontWeight: 800,
+              lineHeight: 0.96,
+              letterSpacing: "-0.04em",
+              color: THEME.colors.ink,
+            }}
+          />
+        </div>
+
+        {/* Line 2: "AI agent" (local 3..11 & 4..12) */}
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "center",
+            alignItems: "baseline",
+            columnGap: 26,
+          }}
+        >
+          <KineticWord
+            frame={frame}
+            fps={fps}
+            start={3}
+            settleDuration={8}
+            blurDuration={4}
+            blurFrom={14}
+            slideY={44}
+            scaleFrom={0.68}
+            text={words[2]}
+            style={{
+              fontSize: 156,
+              fontWeight: 900,
+              lineHeight: 0.96,
+              letterSpacing: "-0.045em",
+              color: THEME.colors.ink,
+            }}
+          />
+          <KineticWord
+            frame={frame}
+            fps={fps}
+            start={4}
+            settleDuration={8}
+            blurDuration={4}
+            blurFrom={14}
+            slideY={44}
+            scaleFrom={0.68}
+            text={words[3]}
+            style={{
+              fontSize: 156,
+              fontWeight: 900,
+              lineHeight: 0.96,
+              letterSpacing: "-0.045em",
+              color: THEME.colors.ink,
+            }}
+          />
+        </div>
+
+        {/* Line 3: "on make.fun." (local 5..13 & 6..14 == global f329 -> frozen f330..374!) */}
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "center",
+            alignItems: "baseline",
+            columnGap: 22,
+          }}
+        >
+          <KineticWord
+            frame={frame}
+            fps={fps}
+            start={5}
+            settleDuration={8}
+            blurDuration={4}
+            blurFrom={14}
+            slideY={40}
+            scaleFrom={0.7}
+            text={words[4]}
+            style={{
+              fontSize: 122,
+              fontWeight: 800,
+              lineHeight: 1,
+              letterSpacing: "-0.04em",
+              color: THEME.colors.ink,
+            }}
+          />
+          <KineticWord
+            frame={frame}
+            fps={fps}
+            start={6}
+            settleDuration={8}
+            blurDuration={4}
+            blurFrom={16}
+            slideY={44}
+            scaleFrom={0.66}
+            text={brandCore}
+            trailingPunct={brandDot}
+            trailingColor={THEME.colors.ink}
+            glowOpacity={brandGlow}
+            style={{
+              fontSize: 122,
+              fontWeight: 900,
+              lineHeight: 1,
+              letterSpacing: "-0.04em",
+              color: THEME.colors.magenta,
+            }}
+          />
+        </div>
+
+        {/* Minimal static studio horizon accent (frozen f329..374) */}
+        <div
+          style={{
+            marginTop: 34,
+            width: 184,
+            height: 6,
+            borderRadius: 3,
+            background: `linear-gradient(90deg, ${THEME.colors.magenta} 0%, ${THEME.colors.cyan} 100%)`,
+            transform: `scaleX(${horizonScale.toFixed(4)})`,
+            transformOrigin: "50% 50%",
+          }}
+        />
+      </div>
+    </AbsoluteFill>
+  );
+};
+
+// ============================================================================
+// BEAT 6: TENANG CALM END PLATE (f375..449)
+// Zero text, zero animation — clean light studio plate for official ffmpeg end card.
+// ============================================================================
+const CalmEndPlate = () => {
+  return (
+    <AbsoluteFill style={{ pointerEvents: "none" }}>
+      <div
+        style={{
+          position: "absolute",
+          left: 240,
+          right: 240,
+          top: 1084,
+          height: 2,
+          background: `linear-gradient(90deg, transparent 0%, ${THEME.colors.lineHair} 50%, transparent 100%)`,
+          opacity: 0.72,
+        }}
+      />
+    </AbsoluteFill>
+  );
+};
+
+// ============================================================================
+// ROOT COMPOSITION COMPONENT: AdDesk (1080x1920, 30fps, 450 frames)
+// 6 discrete full-screen beats on the 15-frame (120 BPM) grid with blur-zoom cuts.
+// ============================================================================
+export const AdDesk = () => {
+  const frame = useCurrentFrame();
+  const isCalmPlate = frame >= BEATS.calmStart;
+
+  return (
+    <AbsoluteFill
+      style={{
+        width: 1080,
+        height: 1920,
+        fontFamily: THEME.font,
+        overflow: "hidden",
+      }}
+    >
+      {/* Persistent clean light studio backdrop (frozen f329..374 & f375..449) */}
+      <StudioBackdrop frame={frame} isCalmPlate={isCalmPlate} />
+
+      {/* Beat 1 (f0..59): HOOK — Full-screen kinetic phrases -> desk+token entry f45..59 */}
+      <Sequence from={BEATS.hookStart} durationInFrames={BEATS.hookDuration}>
+        <HookBeat />
+      </Sequence>
+
+      {/* Beat 2 (f60..134): META — Hero token lock + 20f dead-still hold + speed-ramp unfold */}
+      <Sequence from={BEATS.metaStart} durationInFrames={BEATS.metaDuration}>
+        <MetaBeat />
+      </Sequence>
+
+      {/* Beat 3 (f135..239): ARENA — Hero modules one-by-one (f150/f180/f210) -> 3-card fan */}
+      <Sequence from={BEATS.arenaStart} durationInFrames={BEATS.arenaDuration}>
+        <ArenaBeat />
+      </Sequence>
+
+      {/* Beat 4 (f240..314): TARUHAN — Hero push-in + "$500 PRIZE POOL" slam (<= f262) */}
+      <Sequence from={BEATS.stakesStart} durationInFrames={BEATS.stakesDuration}>
+        <TaruhanBeat />
+      </Sequence>
+
+      {/* Beat 5 (f315..374): PUNCHLINE — Full-screen closing sentence, dead-still f330..374 */}
+      <Sequence from={BEATS.punchStart} durationInFrames={BEATS.punchDuration}>
+        <PunchlineBeat />
+      </Sequence>
+
+      {/* Beat 6 (f375..449): TENANG — Calm light plate, zero text, zero animation */}
+      <Sequence from={BEATS.calmStart} durationInFrames={BEATS.calmDuration}>
+        <CalmEndPlate />
+      </Sequence>
+
+      {/* Persistent small label "make.fun contest" across active beats f0..374 (absent on TENANG) */}
+      <Sequence from={0} durationInFrames={BEATS.calmStart}>
+        <KickerLabel />
+      </Sequence>
+    </AbsoluteFill>
+  );
+};
+
+export default AdDesk;

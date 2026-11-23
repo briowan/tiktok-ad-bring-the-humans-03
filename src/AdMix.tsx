@@ -1,0 +1,2803 @@
+import React, { useEffect, useMemo } from "react";
+import {
+  AbsoluteFill,
+  Easing,
+  Sequence,
+  interpolate,
+  spring,
+  useCurrentFrame,
+  useVideoConfig,
+} from "remotion";
+import { ThreeCanvas } from "@remotion/three";
+import { useThree } from "@react-three/fiber";
+import * as THREE from "three";
+import { StudioBg, AgentToken, SlotScene, CoinField } from "./DWorlds";
+import { TaskWorld } from "./TaskWorld";
+
+// ============================================================================
+// Single Source of Truth — Verbatim Copy (Zero Additions / Edits / Extra Stats)
+// ============================================================================
+
+const COPY = {
+  prizeAmount: "$500",
+  prizeLabel: "CASH PRIZE POOL",
+  b2Headline: "Your AI agent can win it.",
+  b3Label: "AI AGENT COMPETITION",
+  b4Headline: "You bring your AI agent.",
+  b5Headline: "It tackles coding challenges.",
+  b6Headline: "Top entries can earn USDC.",
+  b7Headline: "Enter your AI agent on make.fun.",
+} as const;
+
+// ============================================================================
+// Brand Tokens, Safe-Zone Constants & Deterministic Non-Linear Curves
+// ============================================================================
+
+const COLORS = {
+  magenta: "#c41c83",
+  magentaBright: "#e12896",
+  magentaDeep: "#2c0621",
+  magentaPlum: "#4e0b3a",
+  magentaObsidian: "#150311",
+  white: "#ffffff",
+  studioLight: "#f4efe9",
+  ink: "#191419",
+  darkBg: "#0c0b14",
+  cyan: "#22d3ee",
+  cyanSoft: "#67e8f9",
+  gold: "#d8b458",
+  emerald: "#10d998",
+} as const;
+
+const FONT_DISPLAY =
+  '"Plus Jakarta Sans", "Satoshi", "General Sans", "Inter", "SF Pro Display", "Helvetica Neue", sans-serif';
+
+// Text safe zone: x120..960 (width 840), y269..1248; badge exclusion: x96..474 y248..424
+const SAFE = {
+  left: 120,
+  width: 840,
+  top: 269,
+  bottom: 1248,
+  belowBadgeY: 444,
+} as const;
+
+const EASE_OUT = Easing.bezier(0.22, 1, 0.36, 1);
+const EASE_SNAP = Easing.bezier(0.16, 1, 0.3, 1);
+const EASE_IN = Easing.in(Easing.cubic);
+const EASE_IN_OUT = Easing.inOut(Easing.cubic);
+const EASE_FLOW = Easing.bezier(0.37, 0.04, 0.63, 0.96);
+const EASE_ZOOM_THROUGH = Easing.bezier(0.58, 0.04, 0.88, 0.98);
+const EASE_CONTINUOUS = Easing.bezier(0.26, 0.14, 0.42, 0.96);
+const EASE_TOKEN_FLIGHT = Easing.bezier(0.32, 0.08, 0.42, 0.98);
+const EASE_SLOW_RELEASE = Easing.bezier(0.38, 0.08, 0.72, 0.92);
+const EASE_SPEED_RAMP_DIVE = Easing.bezier(0.46, 0.08, 0.82, 0.96);
+const EASE_LOCK_SETTLE = Easing.bezier(0.18, 0.65, 0.34, 1);
+const EASE_CHECK_POP = Easing.bezier(0.32, 0.08, 0.56, 1);
+const EASE_PUSH_THROUGH = Easing.bezier(0.62, 0.02, 0.88, 0.96);
+const EASE_SOFT_WIPE = Easing.bezier(0.36, 0.04, 0.52, 1);
+
+const CLAMP = {
+  extrapolateLeft: "clamp" as const,
+  extrapolateRight: "clamp" as const,
+};
+
+const FLOOR_Y = -1.35;
+const PEDESTAL_CENTER_Y = FLOOR_Y + 0.12; // -1.23 (exact match to DWorlds StudioPedestal)
+const PEDESTAL_DECK_Y = FLOOR_Y + 0.24; // -1.11 (exact match to DWorlds PEDESTAL_DECK_Y)
+const SLOT_DOCK_SCALE = 1.3;
+const CANVAS_GL = {
+  antialias: true,
+  alpha: true,
+  toneMapping: THREE.ACESFilmicToneMapping,
+  toneMappingExposure: 1.04,
+} as const;
+
+// ============================================================================
+// Shared Continuity Math, Speed Ramps & Subtle Micro-Shake Helpers
+// ============================================================================
+
+const lerp = (a: number, b: number, t: number): number => a + (b - a) * t;
+
+const lerp3 = (
+  a: readonly [number, number, number],
+  b: readonly [number, number, number],
+  t: number
+): [number, number, number] => [
+  lerp(a[0], b[0], t),
+  lerp(a[1], b[1], t),
+  lerp(a[2], b[2], t),
+];
+
+// Subtle 3-frame damped deterministic micro-shake for impact hits (lock & checkmark pop)
+const getMicroShake = (
+  frame: number,
+  triggerFrame: number,
+  amplitudePx = 5.5
+): { x: number; y: number; active: boolean } => {
+  const dt = frame - triggerFrame;
+  if (dt < 0 || dt >= 3) {
+    return { x: 0, y: 0, active: false };
+  }
+  const decay = interpolate(dt, [0, 1, 2, 3], [1, 0.54, 0.22, 0], {
+    easing: EASE_OUT,
+    ...CLAMP,
+  });
+  const x = Math.sin(dt * 2.9 + 1.1) * amplitudePx * decay;
+  const y = Math.cos(dt * 3.1 + 0.4) * (amplitudePx * 0.78) * decay;
+  return { x, y, active: true };
+};
+
+// Shared B2 -> B3 match-cut pose (locks B2 token + camera directly onto B3 HeroStage3D)
+interface HeroPose {
+  camPos: [number, number, number];
+  camTarget: [number, number, number];
+  tokenPos: [number, number, number];
+  tokenScale: number;
+  tokenSpin: number;
+  tokenFrame: number;
+  ringGlow: number;
+}
+
+const getB3HeroPose = (b3f: number): HeroPose => {
+  const orbitT = interpolate(b3f, [-4, 48], [-0.06, 1], {
+    easing: EASE_CONTINUOUS,
+    ...CLAMP,
+  });
+  const pushT = interpolate(b3f, [-4, 48], [-0.05, 1], {
+    easing: EASE_OUT,
+    ...CLAMP,
+  });
+
+  const angle = -0.27 + orbitT * 0.36; // continuous left-to-right orbit (-15.5deg -> +5.2deg)
+  const dist = 13.45 - pushT * 1.75; // smooth push-in (13.45 -> 11.7)
+  const camX = Math.sin(angle) * dist;
+  const camZ = Math.cos(angle) * dist;
+  const camY = 1.88 - pushT * 0.42 + Math.sin(Math.max(0, orbitT) * Math.PI) * 0.22;
+
+  const tokenScale = interpolate(b3f, [-4, 10], [1.26, 1.38], {
+    easing: EASE_OUT,
+    ...CLAMP,
+  });
+  const tokenFloatY = 0.2 + Math.sin(b3f * 0.095) * 0.055;
+  const tokenSpin = interpolate(b3f, [-4, 46], [-14, 12], {
+    easing: EASE_IN_OUT,
+    ...CLAMP,
+  });
+  const ringGlow = 0.48 + Math.sin(b3f * 0.11) * 0.14;
+
+  return {
+    camPos: [camX, camY, camZ],
+    camTarget: [0, -0.1, 0],
+    tokenPos: [0, tokenFloatY, 0],
+    tokenScale,
+    tokenSpin,
+    tokenFrame: b3f + 90,
+    ringGlow,
+  };
+};
+
+// Shared B3 -> B4 speed-ramped SlotScene frame curve:
+// slow start of flight (b4f 0..18) -> fast accelerating approach (18..43) -> lock at global f~195 (b4f 43..45) -> settle
+const getB4SlotFrame = (b4f: number): number => {
+  if (b4f <= 18) {
+    return interpolate(b4f, [-4, 18], [16.9, 25.5], {
+      easing: EASE_SLOW_RELEASE,
+      ...CLAMP,
+    });
+  }
+  if (b4f <= 43) {
+    return interpolate(b4f, [18, 43], [25.5, 45], {
+      easing: EASE_SPEED_RAMP_DIVE,
+      ...CLAMP,
+    });
+  }
+  return interpolate(b4f, [43, 59], [45, 74], {
+    easing: EASE_LOCK_SETTLE,
+    ...CLAMP,
+  });
+};
+
+// Exact analytical match of SlotScene's AgentToken entry pose (DWorlds.tsx) for seamless B3 -> B4 handoff
+const getB4TokenEntryPose = (
+  b4f: number
+): {
+  pos: [number, number, number];
+  scale: number;
+  spin: number;
+  slotFrame: number;
+} => {
+  const sf = getB4SlotFrame(b4f);
+  const approachT = interpolate(sf, [0, 22], [0, 1], {
+    easing: EASE_OUT,
+    ...CLAMP,
+  });
+  const insertT = interpolate(sf, [22, 45], [0, 1], {
+    easing: EASE_IN_OUT,
+    ...CLAMP,
+  });
+  const hoverFloat = Math.sin(sf * 0.14) * 0.045 * (1 - insertT);
+  const startY = 1.32 - approachT * 0.26;
+  const tokenY = startY + (0.24 - startY) * insertT + hoverFloat;
+  const tokenSpinDeg = -34 * (1 - approachT) - 10 * (1 - insertT);
+
+  return {
+    pos: [0, tokenY, 0],
+    scale: 1.22,
+    spin: tokenSpinDeg,
+    slotFrame: sf,
+  };
+};
+
+// Shared B4 camera rig continuing B3's rightward orbital momentum into the dock lock
+const getB4CameraPose = (
+  b4f: number
+): { position: [number, number, number]; target: [number, number, number] } => {
+  const orbitT = interpolate(b4f, [-4, 59], [-0.06, 1], {
+    easing: EASE_IN_OUT,
+    ...CLAMP,
+  });
+  const lockKick = interpolate(b4f, [43, 45, 53], [0, -0.34, 0], {
+    easing: EASE_OUT,
+    ...CLAMP,
+  });
+  const flashSurge = interpolate(b4f, [54, 61], [0, 0.68], {
+    easing: EASE_IN,
+    ...CLAMP,
+  });
+  const camX = 1.25 + orbitT * 2.15;
+  const camY = 4.35 - orbitT * 0.52 + lockKick * 0.4;
+  const camZ = 14.7 - orbitT * 1.25 + lockKick - flashSurge;
+
+  return {
+    position: [camX, camY, camZ],
+    target: [0, 1.55, 0],
+  };
+};
+
+// TaskWorld remap: chaos -> tidy grid -> emerald checkmark peak pop right at global f~255 (b5f = 44..45)
+const getB5TaskFrame = (b5f: number): number => {
+  if (b5f <= 0) {
+    return 0;
+  }
+  if (b5f <= 41) {
+    return interpolate(b5f, [0, 41], [0, 52], {
+      easing: EASE_FLOW,
+      ...CLAMP,
+    });
+  }
+  return interpolate(b5f, [41, 64], [52, 89], {
+    easing: EASE_CHECK_POP,
+    ...CLAMP,
+  });
+};
+
+// ============================================================================
+// Shared 3D Infrastructure (100% Frame-Driven, useThree Only)
+// ============================================================================
+
+const MixCameraRig: React.FC<{
+  position: readonly [number, number, number];
+  target: readonly [number, number, number];
+  fov?: number;
+}> = ({ position, target, fov = 34 }) => {
+  const { camera, invalidate } = useThree();
+  const [px, py, pz] = position;
+  const [tx, ty, tz] = target;
+
+  camera.position.set(px, py, pz);
+  camera.lookAt(tx, ty, tz);
+  if (camera instanceof THREE.PerspectiveCamera && camera.fov !== fov) {
+    camera.fov = fov;
+    camera.updateProjectionMatrix();
+  }
+  camera.updateMatrixWorld();
+
+  useEffect(() => {
+    camera.position.set(px, py, pz);
+    camera.lookAt(tx, ty, tz);
+    if (camera instanceof THREE.PerspectiveCamera) {
+      camera.fov = fov;
+      camera.updateProjectionMatrix();
+    }
+    camera.updateMatrixWorld();
+    invalidate();
+  }, [camera, invalidate, px, py, pz, tx, ty, tz, fov]);
+
+  return null;
+};
+
+const createWhiteStudioEnvTexture = (): THREE.Texture => {
+  if (typeof document === "undefined") {
+    const fallback = new THREE.DataTexture(
+      new Uint8Array([250, 248, 246, 255]),
+      1,
+      1
+    );
+    fallback.needsUpdate = true;
+    return fallback;
+  }
+
+  const canvas = document.createElement("canvas");
+  canvas.width = 512;
+  canvas.height = 256;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    const fallback = new THREE.DataTexture(
+      new Uint8Array([250, 248, 246, 255]),
+      1,
+      1
+    );
+    fallback.needsUpdate = true;
+    return fallback;
+  }
+
+  const bg = ctx.createLinearGradient(0, 0, 0, 256);
+  bg.addColorStop(0, "#ffffff");
+  bg.addColorStop(0.5, "#f5f1ec");
+  bg.addColorStop(1, "#cfc6be");
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, 512, 256);
+
+  ctx.fillStyle = "rgba(255,255,255,0.96)";
+  ctx.fillRect(62, 22, 42, 168);
+  ctx.fillStyle = "rgba(255,244,232,0.9)";
+  ctx.fillRect(390, 26, 46, 158);
+
+  const rimMagenta = ctx.createRadialGradient(142, 128, 6, 142, 128, 96);
+  rimMagenta.addColorStop(0, "rgba(196,28,131,0.34)");
+  rimMagenta.addColorStop(1, "rgba(196,28,131,0)");
+  ctx.fillStyle = rimMagenta;
+  ctx.fillRect(0, 0, 512, 256);
+
+  const rimCyan = ctx.createRadialGradient(368, 126, 6, 368, 126, 96);
+  rimCyan.addColorStop(0, "rgba(34,211,238,0.28)");
+  rimCyan.addColorStop(1, "rgba(34,211,238,0)");
+  ctx.fillStyle = rimCyan;
+  ctx.fillRect(0, 0, 512, 256);
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.mapping = THREE.EquirectangularReflectionMapping;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.needsUpdate = true;
+  return tex;
+};
+
+// Exact synchronous procedural helpers matching DWorlds SlotScene for seamless B3 -> B4 pedestal/slot continuity
+const createRoundedRectShape = (w: number, h: number, r: number): THREE.Shape => {
+  const shape = new THREE.Shape();
+  const x = -w / 2;
+  const y = -h / 2;
+  const rad = Math.min(r, w / 2, h / 2);
+  shape.moveTo(x + rad, y);
+  shape.lineTo(x + w - rad, y);
+  shape.quadraticCurveTo(x + w, y, x + w, y + rad);
+  shape.lineTo(x + w, y + h - rad);
+  shape.quadraticCurveTo(x + w, y + h, x + w - rad, y + h);
+  shape.lineTo(x + rad, y + h);
+  shape.quadraticCurveTo(x, y + h, x, y + h - rad);
+  shape.lineTo(x, y + rad);
+  shape.quadraticCurveTo(x, y, x + rad, y);
+  return shape;
+};
+
+const createUprightBeveledBlockGeometry = (
+  totalW: number,
+  totalD: number,
+  totalH: number,
+  cornerR: number,
+  bevel: number,
+  bevelSegments = 4
+): THREE.ExtrudeGeometry => {
+  const safeBevel = Math.min(
+    bevel,
+    totalW * 0.25,
+    totalD * 0.25,
+    totalH * 0.35
+  );
+  const innerW = Math.max(0.01, totalW - safeBevel * 2);
+  const innerD = Math.max(0.01, totalD - safeBevel * 2);
+  const extrudeDepth = Math.max(0.01, totalH - safeBevel * 2);
+  const innerR = Math.max(0.005, cornerR - safeBevel);
+
+  const shape = createRoundedRectShape(innerW, innerD, innerR);
+  const geo = new THREE.ExtrudeGeometry(shape, {
+    depth: extrudeDepth,
+    bevelEnabled: true,
+    bevelThickness: safeBevel,
+    bevelSize: safeBevel,
+    bevelSegments,
+    curveSegments: 16,
+  });
+  geo.rotateX(-Math.PI / 2);
+  geo.translate(0, safeBevel, 0);
+  geo.computeVertexNormals();
+  return geo;
+};
+
+const createRadialStudioTexture = (
+  rgb: readonly [number, number, number],
+  peakAlpha: number
+): THREE.Texture => {
+  if (typeof document === "undefined") {
+    const fallback = new THREE.DataTexture(
+      new Uint8Array([rgb[0], rgb[1], rgb[2], 0]),
+      1,
+      1
+    );
+    fallback.needsUpdate = true;
+    return fallback;
+  }
+  const canvas = document.createElement("canvas");
+  canvas.width = 256;
+  canvas.height = 256;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    const fallback = new THREE.DataTexture(
+      new Uint8Array([rgb[0], rgb[1], rgb[2], 0]),
+      1,
+      1
+    );
+    fallback.needsUpdate = true;
+    return fallback;
+  }
+  const grad = ctx.createRadialGradient(128, 128, 8, 128, 128, 122);
+  grad.addColorStop(0, `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${peakAlpha})`);
+  grad.addColorStop(0.45, `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${peakAlpha * 0.56})`);
+  grad.addColorStop(0.78, `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${peakAlpha * 0.14})`);
+  grad.addColorStop(1, `rgba(${rgb[0]},${rgb[1]},${rgb[2]},0)`);
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, 256, 256);
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.needsUpdate = true;
+  return tex;
+};
+
+// Lightweight PMREM + 3-point studio lighting for standalone transparent AgentToken shots
+const FloatingTokenRig: React.FC<{
+  frame: number;
+  keyRange?: readonly [number, number];
+}> = ({ frame, keyRange = [-4.2, 4.2] }) => {
+  const { gl, scene } = useThree();
+
+  const envRT = useMemo(() => {
+    const equirect = createWhiteStudioEnvTexture();
+    try {
+      const pmrem = new THREE.PMREMGenerator(gl);
+      pmrem.compileEquirectangularShader();
+      const rt = pmrem.fromEquirectangular(equirect);
+      equirect.dispose();
+      pmrem.dispose();
+      return rt;
+    } catch {
+      equirect.dispose();
+      return null;
+    }
+  }, [gl]);
+
+  if (envRT) {
+    scene.environment = envRT.texture;
+  }
+
+  useEffect(() => {
+    if (envRT) {
+      scene.environment = envRT.texture;
+    }
+    return () => {
+      if (envRT) {
+        if (scene.environment === envRT.texture) {
+          scene.environment = null;
+        }
+        envRT.dispose();
+      }
+    };
+  }, [scene, envRT]);
+
+  const keyX = interpolate(frame, [0, 44], [keyRange[0], keyRange[1]], {
+    easing: EASE_IN_OUT,
+    ...CLAMP,
+  });
+
+  return (
+    <>
+      <hemisphereLight args={["#ffffff", "#e5dcd4", 0.95]} />
+      <directionalLight position={[keyX, 5.8, 7.2]} intensity={2.25} color="#fffaf5" />
+      <directionalLight position={[-4.8, 2.4, -3.5]} intensity={1.15} color="#d6f4ff" />
+      <directionalLight position={[4.5, -1.8, 3.6]} intensity={0.75} color="#ff8ad0" />
+    </>
+  );
+};
+
+// ============================================================================
+// Shared 2D Polish Helpers (Grain, Vignette, B4->B5 Lock Light Flash)
+// ============================================================================
+
+const NOISE_SVG_URI =
+  'url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' width=\'220\' height=\'220\'%3E%3Cfilter id=\'n\'%3E%3CfeTurbulence type=\'fractalNoise\' baseFrequency=\'0.88\' numOctaves=\'2\'/%3E%3C/filter%3E%3Crect width=\'220\' height=\'220\' filter=\'url(%23n)\' opacity=\'0.5\'/%3E%3C/svg%3E")';
+
+const FilmGrain: React.FC<{ dark?: boolean; opacity?: number }> = ({
+  dark = false,
+  opacity = 0.038,
+}) => {
+  const frame = useCurrentFrame();
+  return (
+    <AbsoluteFill
+      style={{
+        pointerEvents: "none",
+        backgroundImage: NOISE_SVG_URI,
+        backgroundSize: "220px 220px",
+        backgroundPosition: `${(frame * 7) % 220}px ${(frame * 13) % 220}px`,
+        opacity,
+        mixBlendMode: dark ? "overlay" : "multiply",
+      }}
+    />
+  );
+};
+
+const SubtleVignette: React.FC<{ strength?: number }> = ({ strength = 0.22 }) => (
+  <AbsoluteFill
+    style={{
+      pointerEvents: "none",
+      background: `radial-gradient(ellipse at center, transparent 58%, rgba(12, 8, 16, ${strength}) 100%)`,
+    }}
+  />
+);
+
+// B4 -> B5 (f206..215, 5-frame bright core f208..212) White/Cyan Light Flash from Lock Ring
+const TransitionLockFlash: React.FC = () => {
+  const frame = useCurrentFrame(); // 0..9, frame 4 === exact global f210
+
+  const washOpacity = interpolate(frame, [0, 2, 4, 6, 8, 9], [0, 0.44, 0.98, 0.56, 0.14, 0], {
+    easing: EASE_OUT,
+    ...CLAMP,
+  });
+  const coreScale = interpolate(frame, [0, 4, 9], [0.22, 2.25, 3.2], {
+    easing: EASE_OUT,
+    ...CLAMP,
+  });
+  const coreOpacity = interpolate(frame, [0, 1.5, 4, 6.5, 9], [0, 0.72, 1, 0.45, 0], {
+    easing: EASE_OUT,
+    ...CLAMP,
+  });
+  const originY = interpolate(frame, [0, 4, 9], [66, 56, 42], {
+    easing: EASE_IN_OUT,
+    ...CLAMP,
+  });
+  const ringScale = interpolate(frame, [1, 8], [0.24, 2.75], {
+    easing: EASE_OUT,
+    ...CLAMP,
+  });
+  const ringOpacity = interpolate(frame, [1, 3, 7, 9], [0, 0.9, 0.22, 0], {
+    easing: EASE_OUT,
+    ...CLAMP,
+  });
+
+  if (washOpacity <= 0.005 && coreOpacity <= 0.005) {
+    return null;
+  }
+
+  return (
+    <AbsoluteFill style={{ pointerEvents: "none", overflow: "hidden", zIndex: 30 }}>
+      {/* Full-frame luminous white-cyan flash wash bridging light B4 -> dark B5 */}
+      <AbsoluteFill
+        style={{
+          opacity: washOpacity,
+          background: `radial-gradient(circle at 50% ${originY.toFixed(1)}%, #ffffff 0%, #e0fcff 38%, rgba(103, 232, 249, 0.94) 72%, rgba(34, 211, 238, 0.85) 100%)`,
+        }}
+      />
+
+      {/* Focused additive radial flare originating from B4 lock ring */}
+      <div
+        style={{
+          position: "absolute",
+          left: "50%",
+          top: `${originY.toFixed(1)}%`,
+          width: 980,
+          height: 980,
+          borderRadius: "50%",
+          opacity: coreOpacity,
+          transform: `translate(-50%, -50%) scale(${coreScale.toFixed(3)})`,
+          background:
+            "radial-gradient(circle, rgba(255,255,255,1) 0%, rgba(205,250,255,0.92) 28%, rgba(34,211,238,0.68) 56%, rgba(34,211,238,0) 80%)",
+          filter: "blur(18px)",
+        }}
+      />
+
+      {/* Expanding crisp cyan shock-ring sweeping upward from dock lock */}
+      {ringOpacity > 0.01 && (
+        <div
+          style={{
+            position: "absolute",
+            left: "50%",
+            top: `${originY.toFixed(1)}%`,
+            width: 560,
+            height: 560,
+            borderRadius: "50%",
+            opacity: ringOpacity,
+            border: "7px solid rgba(165, 243, 252, 0.95)",
+            boxShadow:
+              "0 0 46px rgba(34, 211, 238, 0.9), inset 0 0 28px rgba(255, 255, 255, 0.85)",
+            transform: `translate(-50%, -50%) scale(${ringScale.toFixed(3)})`,
+          }}
+        />
+      )}
+    </AbsoluteFill>
+  );
+};
+
+// ============================================================================
+// B1 (f0-44, 45f; overlap tail f45-49) — KINETIC TYPE (Magenta Block, Zero 3D)
+// "$500" sharp & full at f0 + "CASH PRIZE POOL" landed <= f11,
+// then B1->B2 magenta zoom-through (f39-49) revealing white B2 underneath
+// ============================================================================
+
+const Beat1KineticType: React.FC = () => {
+  const frame = useCurrentFrame(); // 0..49
+  const labelWords = useMemo(() => COPY.prizeLabel.split(" "), []);
+
+  // Continuous living light sheen & geometric rule movement (keeps frame alive while type holds)
+  const sheenX = interpolate(frame, [0, 44], [-420, 680], {
+    easing: EASE_IN_OUT,
+    ...CLAMP,
+  });
+  const orbShiftY = interpolate(frame, [0, 44], [-60, 80], {
+    easing: EASE_IN_OUT,
+    ...CLAMP,
+  });
+
+  // Cyan architectural underline draw under "$500" (f4..24) + traveling highlight glint (f22..42)
+  const barProgress = interpolate(frame, [4, 24], [0, 1], {
+    easing: EASE_SNAP,
+    ...CLAMP,
+  });
+  const barGlintX = interpolate(frame, [22, 42], [-140, 920], {
+    easing: EASE_OUT,
+    ...CLAMP,
+  });
+
+  // Secondary minimal graphic rule along bottom of safe zone (f18..40)
+  const subRuleProgress = interpolate(frame, [18, 40], [0, 1], {
+    easing: EASE_OUT,
+    ...CLAMP,
+  });
+
+  // B1 -> B2 Zoom-Through Transition (f39..49, 10 frames centered around f45)
+  const zoomT = interpolate(frame, [39, 49], [0, 1], {
+    easing: EASE_ZOOM_THROUGH,
+    ...CLAMP,
+  });
+  const prizeZoomScale = 1 + zoomT * 5.8; // "$500" punches 1x -> 6.8x through camera lens
+  const bgZoomScale = 1 + zoomT * 0.42;
+  const supportExitT = interpolate(frame, [39, 45], [0, 1], {
+    easing: EASE_IN,
+    ...CLAMP,
+  });
+  const zoomBlurPx = interpolate(frame, [40, 48], [0, 16], {
+    easing: EASE_IN,
+    ...CLAMP,
+  });
+  const layerOpacity = interpolate(frame, [42, 49], [1, 0], {
+    easing: EASE_IN_OUT,
+    ...CLAMP,
+  });
+  const portalGlowOpacity = interpolate(frame, [41, 46, 49], [0, 0.52, 0], {
+    easing: EASE_OUT,
+    ...CLAMP,
+  });
+
+  return (
+    <AbsoluteFill
+      style={{
+        backgroundColor: COLORS.magenta,
+        overflow: "hidden",
+        opacity: layerOpacity,
+        filter: zoomBlurPx > 0.05 ? `blur(${zoomBlurPx.toFixed(2)}px)` : "none",
+        zIndex: 18,
+      }}
+    >
+      {/* Dimensional magenta lighting mesh rushing slightly outward during zoom-through */}
+      <AbsoluteFill
+        style={{
+          transformOrigin: "390px 571px",
+          transform: bgZoomScale > 1.001 ? `scale(${bgZoomScale.toFixed(4)})` : "none",
+        }}
+      >
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            background: `radial-gradient(circle at 78% 24%, ${COLORS.magentaBright} 0%, ${COLORS.magenta} 48%, #981164 100%)`,
+          }}
+        />
+        <div
+          style={{
+            position: "absolute",
+            width: 980,
+            height: 980,
+            borderRadius: "50%",
+            right: -260,
+            top: 180 + orbShiftY,
+            background:
+              "radial-gradient(circle, rgba(255, 118, 206, 0.32) 0%, rgba(196, 28, 131, 0) 64%)",
+            filter: "blur(55px)",
+          }}
+        />
+        {/* Diagonal moving studio specular band */}
+        <div
+          style={{
+            position: "absolute",
+            top: -320,
+            left: sheenX,
+            width: 420,
+            height: 2560,
+            transform: "rotate(18deg)",
+            background:
+              "linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.09) 50%, transparent 100%)",
+          }}
+        />
+      </AbsoluteFill>
+
+      {/* Luminous white portal bloom expanding behind "$500" as camera punches through to B2 */}
+      {portalGlowOpacity > 0.01 && (
+        <div
+          style={{
+            position: "absolute",
+            left: 390,
+            top: 571,
+            width: 720,
+            height: 720,
+            borderRadius: "50%",
+            opacity: portalGlowOpacity,
+            transform: `translate(-50%, -50%) scale(${(0.55 + zoomT * 2.1).toFixed(3)})`,
+            background:
+              "radial-gradient(circle, rgba(255,255,255,0.95) 0%, rgba(255,220,242,0.55) 45%, rgba(255,255,255,0) 76%)",
+            filter: "blur(24px)",
+            pointerEvents: "none",
+          }}
+        />
+      )}
+
+      {/* Safe-Zone Poster Block: x120..960, y472..1200 (strictly below y424 badge box) */}
+      <div
+        style={{
+          position: "absolute",
+          left: SAFE.left,
+          top: 472,
+          width: SAFE.width,
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "flex-start",
+        }}
+      >
+        {/* "$500" — 100% sharp, full opacity, full scale at f0..38, then zooms through camera f39..49 */}
+        <div
+          style={{
+            fontFamily: FONT_DISPLAY,
+            fontSize: 220,
+            fontWeight: 900,
+            lineHeight: 0.9,
+            letterSpacing: "-0.045em",
+            fontVariantNumeric: "tabular-nums",
+            color: COLORS.white,
+            textShadow: "0 14px 40px rgba(82, 6, 54, 0.32)",
+            transformOrigin: "34% 48%",
+            transform:
+              prizeZoomScale > 1.001 ? `scale(${prizeZoomScale.toFixed(4)})` : "none",
+          }}
+        >
+          {COPY.prizeAmount}
+        </div>
+
+        {/* Supporting bar + "CASH PRIZE POOL" + tick line (push cleanly outward during zoom-through) */}
+        <div
+          style={{
+            width: "100%",
+            opacity: 1 - supportExitT,
+            transformOrigin: "34% 0%",
+            transform:
+              supportExitT > 0.002
+                ? `translateY(${(supportExitT * 145).toFixed(1)}px) scale(${(1 + supportExitT * 0.35).toFixed(4)})`
+                : "none",
+          }}
+        >
+          {/* Cyan kinetic draw-bar divider */}
+          <div
+            style={{
+              position: "relative",
+              width: SAFE.width,
+              height: 12,
+              marginTop: 32,
+              marginBottom: 34,
+              backgroundColor: "rgba(255, 255, 255, 0.16)",
+              borderRadius: 6,
+              overflow: "hidden",
+            }}
+          >
+            <div
+              style={{
+                width: `${barProgress * 100}%`,
+                height: "100%",
+                backgroundColor: COLORS.cyan,
+                borderRadius: 6,
+                boxShadow: "0 0 28px rgba(34, 211, 238, 0.65)",
+              }}
+            />
+            <div
+              style={{
+                position: "absolute",
+                top: 0,
+                left: barGlintX,
+                width: 140,
+                height: "100%",
+                background:
+                  "linear-gradient(90deg, transparent, rgba(255,255,255,0.85), transparent)",
+              }}
+            />
+          </div>
+
+          {/* "CASH PRIZE POOL" — staggered kinetic arrival completely landed by f11 (<=f12) */}
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: 6,
+              width: "100%",
+            }}
+          >
+            {labelWords.map((word, idx) => {
+              const start = 1 + idx * 2; // 1, 3, 5
+              const end = start + 6; // 7, 9, 11 (<= 12)
+              const t = interpolate(frame, [start, end], [0, 1], {
+                easing: EASE_SNAP,
+                ...CLAMP,
+              });
+              const y = interpolate(t, [0, 1], [44, 0], {
+                easing: EASE_SNAP,
+                ...CLAMP,
+              });
+              const opacity = interpolate(t, [0, 0.6, 1], [0, 0.9, 1], {
+                easing: EASE_OUT,
+                ...CLAMP,
+              });
+
+              return (
+                <div
+                  key={idx}
+                  style={{
+                    overflow: "hidden",
+                    paddingBottom: 2,
+                  }}
+                >
+                  <div
+                    style={{
+                      fontFamily: FONT_DISPLAY,
+                      fontSize: 144,
+                      fontWeight: 800,
+                      lineHeight: 0.94,
+                      letterSpacing: "-0.04em",
+                      color: COLORS.white,
+                      opacity,
+                      transform: y > 0.05 ? `translateY(${y.toFixed(2)}px)` : "none",
+                    }}
+                  >
+                    {word}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Quiet architectural cyan tick line near bottom of safe zone */}
+          <div
+            style={{
+              marginTop: 42,
+              width: 220 * subRuleProgress,
+              height: 4,
+              borderRadius: 2,
+              backgroundColor: "rgba(34, 211, 238, 0.72)",
+            }}
+          />
+        </div>
+      </div>
+
+      <FilmGrain dark opacity={0.04} />
+      <SubtleVignette strength={0.2} />
+    </AbsoluteFill>
+  );
+};
+
+// ============================================================================
+// B2 (f45-89, 45f; lead-in f42-44, tail f90-93) — WORD-BUILD + MATCH CUT TOKEN
+// "Your AI agent can win it." starts as B1 zoom finishes, then small side token
+// scales + pushes seamlessly into B3 Hero AgentToken without position jump
+// ============================================================================
+
+const Beat2WordBuild: React.FC<{ beatOffset: number }> = ({ beatOffset }) => {
+  const seqFrame = useCurrentFrame();
+  const bf = seqFrame - beatOffset; // canonical beatFrame: 0 === global f45, 45 === global f90
+  const { width, height } = useVideoConfig();
+
+  const lines = useMemo(() => {
+    const words = COPY.b2Headline.split(" ");
+    return [
+      { words: words.slice(0, 2), offset: 0 }, // "Your AI"
+      { words: words.slice(2, 4), offset: 2 }, // "agent can"
+      { words: words.slice(4, 6), offset: 4 }, // "win it."
+    ];
+  }, []);
+
+  // Counter-settle inertia receiving B1 zoom-through (bf -3..5 = global f42..50)
+  const entrySettleScale = interpolate(bf, [-3, 5], [0.94, 1], {
+    easing: EASE_OUT,
+    ...CLAMP,
+  });
+
+  // Subtle vertical drift keeping the whole typography layout alive
+  const blockDriftY = interpolate(bf, [3, 38], [10, -8], {
+    easing: EASE_IN_OUT,
+    ...CLAMP,
+  });
+
+  // Animated magenta underline under "win" (word index 4)
+  const winUnderlineT = interpolate(bf, [21, 35], [0, 1], {
+    easing: EASE_SNAP,
+    ...CLAMP,
+  });
+
+  // Fast crisp headline exit clearing the frame for the token match cut (bf 35..43 = global f80..88)
+  const textExitT = interpolate(bf, [35, 43], [0, 1], {
+    easing: EASE_IN,
+    ...CLAMP,
+  });
+  const textExitY = -textExitT * 74;
+  const textExitScale = 1 - textExitT * 0.08;
+  const textExitBlur = textExitT * 8.5;
+
+  // B2 -> B3 Token & Camera Match Cut (bf 35..44 = global f80..89, locked to B3 for f89..93)
+  const mcT = interpolate(bf, [35, 44], [0, 1], {
+    easing: EASE_IN_OUT,
+    ...CLAMP,
+  });
+  const targetB3 = getB3HeroPose(bf - 45); // bf - 45 === globalFrame - 90 === b3f
+
+  // Idle camera glides continuously left-to-right + gentle push-in (matches B3 orbit direction!)
+  const idleCamPos: [number, number, number] = [
+    interpolate(bf, [-3, 35], [-4.55, -3.95], { easing: EASE_IN_OUT, ...CLAMP }),
+    interpolate(bf, [-3, 35], [1.52, 1.74], { easing: EASE_IN_OUT, ...CLAMP }),
+    interpolate(bf, [-3, 35], [14.6, 13.85], { easing: EASE_OUT, ...CLAMP }),
+  ];
+  const idleTarget: [number, number, number] = [0, -0.05, 0];
+
+  // Small side-accent AgentToken positioned cleanly in lower-right (x≈776, y≈1126)
+  const tokenEnter = interpolate(bf, [-3, 9], [0, 1], {
+    easing: EASE_OUT,
+    ...CLAMP,
+  });
+  const tokenBobY = Math.sin(bf * 0.14) * 0.065 * (1 - mcT);
+  const idleTokenPos: [number, number, number] = [1.12, -0.84 + tokenBobY, 0.22];
+  const idleTokenScale = 0.68 * (0.88 + 0.12 * tokenEnter);
+  const idleTokenSpin = interpolate(bf, [-3, 35], [-30, -18], {
+    easing: EASE_IN_OUT,
+    ...CLAMP,
+  });
+  const idleRingGlow = 0.28;
+
+  // Seamless blend from B2 accent pose -> exact B3 hero pose (mcT === 1 at f89..93)
+  const camPos = lerp3(idleCamPos, targetB3.camPos, mcT);
+  const camTarget = lerp3(idleTarget, targetB3.camTarget, mcT);
+  const tokenPos = lerp3(idleTokenPos, targetB3.tokenPos, mcT);
+  const tokenScale = lerp(idleTokenScale, targetB3.tokenScale, mcT);
+  const tokenSpin = lerp(idleTokenSpin, targetB3.tokenSpin, mcT);
+  const ringGlow = lerp(idleRingGlow, targetB3.ringGlow, mcT);
+  const tokenFrame = bf + 45; // exact global frame === targetB3.tokenFrame
+
+  // Subtle motion blur pulse at peak match-cut glide speed (0px by f89 so handoff is razor sharp)
+  const matchBlurPx = interpolate(bf, [36, 40, 44], [0, 2.6, 0], {
+    easing: EASE_IN_OUT,
+    ...CLAMP,
+  });
+
+  // Soft white-to-studio dissolve over f89..93 while tokens are pixel-locked on top of each other
+  const layerOpacity = interpolate(bf, [44, 48], [1, 0], {
+    easing: EASE_IN_OUT,
+    ...CLAMP,
+  });
+  const shadowOpacity = 1 - interpolate(bf, [35, 41], [0, 1], {
+    easing: EASE_OUT,
+    ...CLAMP,
+  });
+
+  return (
+    <AbsoluteFill
+      style={{
+        backgroundColor: COLORS.white,
+        overflow: "hidden",
+        opacity: layerOpacity,
+        zIndex: 16,
+      }}
+    >
+      <AbsoluteFill
+        style={{
+          transform:
+            entrySettleScale < 0.999 ? `scale(${entrySettleScale.toFixed(4)})` : "none",
+        }}
+      >
+        {/* Ultra-clean warm-white paper depth tint */}
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            background:
+              "radial-gradient(circle at 82% 62%, rgba(196, 28, 131, 0.055) 0%, rgba(255,255,255,0) 46%)",
+          }}
+        />
+
+        {/* Soft grounded shadow beneath the right-side floating AgentToken */}
+        {shadowOpacity > 0.01 && (
+          <div
+            style={{
+              position: "absolute",
+              left: 650,
+              top: 1278,
+              width: 260,
+              height: 44,
+              borderRadius: "50%",
+              opacity: shadowOpacity,
+              background:
+                "radial-gradient(ellipse at center, rgba(25,20,25,0.12) 0%, rgba(25,20,25,0) 70%)",
+              transform: `scale(${(0.92 + Math.sin(bf * 0.14) * 0.06).toFixed(3)})`,
+            }}
+          />
+        )}
+
+        {/* Single ThreeCanvas for small side-accent AgentToken -> Hero B3 Match Cut */}
+        <AbsoluteFill
+          style={{
+            pointerEvents: "none",
+            filter: matchBlurPx > 0.05 ? `blur(${matchBlurPx.toFixed(2)}px)` : "none",
+          }}
+        >
+          <ThreeCanvas
+            width={width}
+            height={height}
+            dpr={1}
+            camera={{ fov: 34, near: 0.1, far: 100 }}
+            gl={CANVAS_GL}
+            style={{ width: "100%", height: "100%" }}
+          >
+            <MixCameraRig position={camPos} target={camTarget} fov={34} />
+            <FloatingTokenRig frame={bf} keyRange={[-1.8, -4.6]} />
+            <group position={tokenPos}>
+              <AgentToken
+                frame={tokenFrame}
+                scale={tokenScale}
+                spin={tokenSpin}
+                ringGlow={ringGlow}
+              />
+            </group>
+          </ThreeCanvas>
+        </AbsoluteFill>
+
+        {/* Giant 148px Word-by-Word Blur -> Sharp Headline (enters at f48 as B1 zoom finishes) */}
+        <div
+          style={{
+            position: "absolute",
+            left: SAFE.left,
+            top: 492,
+            width: SAFE.width,
+            opacity: 1 - textExitT,
+            filter: textExitBlur > 0.05 ? `blur(${textExitBlur.toFixed(2)}px)` : "none",
+            transform: `translateY(${(blockDriftY + textExitY).toFixed(2)}px) scale(${textExitScale.toFixed(4)})`,
+            transformOrigin: "30% 40%",
+            display: "flex",
+            flexDirection: "column",
+            gap: 10,
+          }}
+        >
+          {lines.map((line, lineIdx) => (
+            <div
+              key={lineIdx}
+              style={{
+                display: "flex",
+                flexDirection: "row",
+                alignItems: "baseline",
+                gap: 32,
+              }}
+            >
+              {line.words.map((word, wIdx) => {
+                const globalIdx = line.offset + wIdx;
+                const start = 3 + globalIdx * 3; // starts at bf=3 (global f48, right as zoom finishes)
+                const t = interpolate(bf, [start, start + 9], [0, 1], {
+                  easing: EASE_SNAP,
+                  ...CLAMP,
+                });
+                const blurPx = interpolate(t, [0, 1], [16, 0], {
+                  easing: EASE_OUT,
+                  ...CLAMP,
+                });
+                const riseY = interpolate(t, [0, 1], [32, 0], {
+                  easing: EASE_SNAP,
+                  ...CLAMP,
+                });
+                const scale = interpolate(t, [0, 1], [0.94, 1], {
+                  easing: EASE_OUT,
+                  ...CLAMP,
+                });
+                const opacity = interpolate(t, [0, 0.5, 1], [0, 0.85, 1], {
+                  easing: EASE_OUT,
+                  ...CLAMP,
+                });
+                const isHeroWord = globalIdx === 4; // "win"
+
+                return (
+                  <span
+                    key={globalIdx}
+                    style={{
+                      position: "relative",
+                      display: "inline-block",
+                      fontFamily: FONT_DISPLAY,
+                      fontSize: 148,
+                      fontWeight: 800,
+                      lineHeight: 0.96,
+                      letterSpacing: "-0.042em",
+                      color: isHeroWord ? COLORS.magenta : COLORS.ink,
+                      opacity,
+                      filter:
+                        blurPx > 0.08 ? `blur(${blurPx.toFixed(2)}px)` : "none",
+                      transform: `translateY(${riseY.toFixed(2)}px) scale(${scale.toFixed(4)})`,
+                    }}
+                  >
+                    {word}
+                    {isHeroWord && (
+                      <span
+                        style={{
+                          position: "absolute",
+                          left: 0,
+                          bottom: -10,
+                          width: `${winUnderlineT * 100}%`,
+                          height: 11,
+                          borderRadius: 6,
+                          backgroundColor: COLORS.magenta,
+                          boxShadow: "0 6px 20px rgba(196, 28, 131, 0.32)",
+                        }}
+                      />
+                    )}
+                  </span>
+                );
+              })}
+            </div>
+          ))}
+        </div>
+
+        <FilmGrain opacity={0.024} />
+      </AbsoluteFill>
+    </AbsoluteFill>
+  );
+};
+
+// ============================================================================
+// B3 (f90-149, 60f; lead-in f88-89, tail f150-154) — HERO 3D (Studio Light)
+// Seamless token match-cut arrival from B2 -> hero orbit + push-in ->
+// continuous shared pedestal morphs & reveals B4 slot cradle while token arcs
+// smoothly into B4 SlotScene (zero empty-space frames, pixel-locked handoff)
+// ============================================================================
+
+const B3_GEMS: ReadonlyArray<{
+  pos: readonly [number, number, number];
+  b4Pos: readonly [number, number, number];
+  scale: number;
+  b4Scale: number;
+  color: string;
+  phase: number;
+  b4Phase: number;
+  metalness: number;
+  b4Metalness: number;
+  b4Roughness: number;
+}> = [
+  {
+    pos: [1.65, 1.08, -0.55],
+    b4Pos: [1.82, 0.96, -0.65],
+    scale: 0.095,
+    b4Scale: 0.11,
+    color: COLORS.magentaBright,
+    phase: 0.4,
+    b4Phase: 0.5,
+    metalness: 0.2,
+    b4Metalness: 0.22,
+    b4Roughness: 0.12,
+  },
+  {
+    pos: [-1.58, 0.62, 0.45],
+    b4Pos: [-1.78, 0.54, 0.58],
+    scale: 0.088,
+    b4Scale: 0.1,
+    color: COLORS.cyan,
+    phase: 1.5,
+    b4Phase: 1.6,
+    metalness: 0.2,
+    b4Metalness: 0.2,
+    b4Roughness: 0.14,
+  },
+  {
+    pos: [1.52, -0.42, 0.72],
+    b4Pos: [1.65, -0.32, 0.95],
+    scale: 0.082,
+    b4Scale: 0.088,
+    color: COLORS.gold,
+    phase: 2.6,
+    b4Phase: 2.5,
+    metalness: 0.9,
+    b4Metalness: 0.9,
+    b4Roughness: 0.16,
+  },
+  {
+    pos: [-1.46, 1.32, -0.68],
+    b4Pos: [-1.55, 1.38, -0.82],
+    scale: 0.075,
+    b4Scale: 0.082,
+    color: "#eeecf2",
+    phase: 3.4,
+    b4Phase: 3.3,
+    metalness: 0.18,
+    b4Metalness: 0.18,
+    b4Roughness: 0.18,
+  },
+];
+
+const HeroStage3D: React.FC<{ frame: number }> = ({ frame }) => {
+  const { fps } = useVideoConfig();
+
+  const stageAssets = useMemo(() => {
+    const shadowTex = createRadialStudioTexture([26, 20, 26], 0.3);
+    const floorGlowTex = createRadialStudioTexture([225, 40, 150], 0.34);
+    const padShadowTex = createRadialStudioTexture([24, 18, 28], 0.38);
+    const dockBaseGeo = createUprightBeveledBlockGeometry(1.66, 1.08, 0.18, 0.22, 0.032, 5);
+    const cheekGeo = createUprightBeveledBlockGeometry(1.26, 0.16, 0.42, 0.06, 0.022, 4);
+    const clampGeo = createUprightBeveledBlockGeometry(0.16, 0.42, 0.32, 0.045, 0.018, 4);
+    return {
+      shadowTex,
+      floorGlowTex,
+      padShadowTex,
+      dockBaseGeo,
+      cheekGeo,
+      clampGeo,
+    };
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      stageAssets.shadowTex.dispose();
+      stageAssets.floorGlowTex.dispose();
+      stageAssets.padShadowTex.dispose();
+      stageAssets.dockBaseGeo.dispose();
+      stageAssets.cheekGeo.dispose();
+      stageAssets.clampGeo.dispose();
+    };
+  }, [stageAssets]);
+
+  // Base hero orbit pose (matches B2 match-cut handoff pixel-for-pixel at f89..93)
+  const heroPose = getB3HeroPose(frame);
+
+  // B3 -> B4 Continuous Orbital Flight & Shared Pedestal Morph (b3f = 45..58 === global f135..148)
+  // Fully locked to B4 SlotScene by b3f = 58 (global f148) for zero-seam crossfade f148..153
+  const diveT = interpolate(frame, [45, 58], [0, 1], {
+    easing: EASE_IN_OUT,
+    ...CLAMP,
+  });
+  const tokenT = interpolate(frame, [45, 58], [0, 1], {
+    easing: EASE_TOKEN_FLIGHT,
+    ...CLAMP,
+  });
+  // Shared pedestal never leaves: expands smoothly in place from B3 proportion (0.83x) -> exact B4 StudioPedestal (1.0x)
+  const pedestalMorphT = interpolate(frame, [44, 54], [0, 1], {
+    easing: EASE_IN_OUT,
+    ...CLAMP,
+  });
+  // B4 Dock Slot Cradle rises smoothly out of the SAME pedestal deck (9f reveal: b3f 47..56 === global f137..146)
+  const slotRevealT = interpolate(frame, [47, 56], [0, 1], {
+    easing: EASE_OUT,
+    ...CLAMP,
+  });
+
+  const b4f = frame - 60; // exact canonical B4 frame (0 === global f150)
+  const b4Cam = getB4CameraPose(b4f);
+  const b4Token = getB4TokenEntryPose(b4f);
+
+  const camPos = lerp3(heroPose.camPos, b4Cam.position, diveT);
+  const camTarget = lerp3(heroPose.camTarget, b4Cam.target, diveT);
+
+  // Continuous single-arc token flight from B3 hero orbit directly to B4 hover apex (zero collision above rising slot)
+  const arcSwing = Math.sin(tokenT * Math.PI);
+  const tokenPos: [number, number, number] = [
+    lerp(heroPose.tokenPos[0], b4Token.pos[0], tokenT) + arcSwing * 0.28,
+    lerp(heroPose.tokenPos[1], b4Token.pos[1], tokenT) + arcSwing * 0.22,
+    lerp(heroPose.tokenPos[2], b4Token.pos[2], tokenT) + arcSwing * 0.18,
+  ];
+  const heroScale = lerp(heroPose.tokenScale, b4Token.scale, tokenT);
+  const heroSpin = lerp(heroPose.tokenSpin, b4Token.spin, tokenT);
+  const heroRingGlow = lerp(heroPose.ringGlow, 0, tokenT);
+  const heroTokenFrame = lerp(heroPose.tokenFrame, b4Token.slotFrame, tokenT);
+
+  // Pedestal glides smoothly up on B2->B3 arrival and stays solidly grounded into B4 (never disappears!)
+  const pedestalEnterY = interpolate(frame, [-2, 10], [-0.48, 0], {
+    easing: EASE_OUT,
+    ...CLAMP,
+  });
+  const pedestalScaleXZ = lerp(0.83, 1, pedestalMorphT);
+  const pedestalCyanEmissive = lerp(
+    0.65 + Math.sin(frame * 0.12) * 0.2,
+    0.55,
+    pedestalMorphT
+  );
+
+  // Slot cradle mechanical reveal parameters (tucked inside pedestal at t=0, exact SlotScene pose at t=1)
+  const dockRiseY = lerp(-0.14, 0, slotRevealT);
+  const dockScaleXZ = SLOT_DOCK_SCALE * lerp(0.86, 1, slotRevealT);
+  const dockScaleY = SLOT_DOCK_SCALE * lerp(0.06, 1, slotRevealT);
+  const b4ClampX =
+    0.72 +
+    interpolate(b4Token.slotFrame, [20, 38], [0, 0.12], {
+      easing: EASE_OUT,
+      ...CLAMP,
+    });
+  const clampX = lerp(0.66, b4ClampX, slotRevealT);
+  const tokenShadowScale = interpolate(tokenPos[1], [0.24, 1.32], [1.14, 0.66], {
+    easing: EASE_OUT,
+    ...CLAMP,
+  });
+  const tokenShadowOpacity =
+    interpolate(tokenPos[1], [0.24, 1.32], [0.66, 0.26], {
+      easing: EASE_OUT,
+      ...CLAMP,
+    }) * slotRevealT;
+
+  // Seamless studio + dock lighting blend from exact B3 -> exact B4 SlotScene
+  const b3KeyX = interpolate(frame, [0, 90], [-4.8, 4.8], {
+    easing: EASE_IN_OUT,
+    ...CLAMP,
+  });
+  const b4KeyX = interpolate(b4Token.slotFrame, [0, 75], [-5.2, 5.2], {
+    easing: EASE_IN_OUT,
+    ...CLAMP,
+  });
+  const keyX = lerp(b3KeyX, b4KeyX, diveT);
+  const keyY = lerp(6.2, 6.4, diveT);
+  const keyIntensity = lerp(1.95, 2.1, diveT);
+  const rimY = lerp(3.2, 3.0, diveT);
+  const rimZ = lerp(-4.4, -4.6, diveT);
+  const rimIntensity = lerp(1.1, 1.2, diveT);
+
+  // Outer cyan orbital halo blooms via physical spring on arrival, dissolves cleanly as token launches
+  const haloEnterSpring = spring({
+    frame: frame + 1,
+    fps,
+    config: { damping: 14, stiffness: 155, mass: 0.9 },
+  });
+  const haloExit = interpolate(frame, [45, 54], [1, 0], {
+    easing: EASE_IN,
+    ...CLAMP,
+  });
+  const haloScale = Math.max(0.01, (0.58 + 0.42 * haloEnterSpring) * (1 + (1 - haloExit) * 0.35));
+  const showOuterHalo = haloExit > 0.04;
+
+  const outerRingRotX = 1.24 + Math.sin(frame * 0.05) * 0.08;
+  const outerRingRotY = -0.25 + frame * 0.036;
+  const outerRingRotZ = 0.18 + Math.cos(frame * 0.045) * 0.06;
+  const satAngle = 0.4 + frame * 0.068;
+
+  return (
+    <group>
+      <MixCameraRig position={camPos} target={camTarget} fov={34} />
+      <StudioBg frame={frame} tone="light" />
+
+      {/* Continuous studio lighting bridging exact B3 lighting -> exact B4 SlotScene lighting */}
+      {diveT > 0.005 && <hemisphereLight args={["#ffffff", "#e5dcd4", 0.58 * diveT]} />}
+      <directionalLight
+        position={[keyX, keyY, 6.8]}
+        intensity={keyIntensity}
+        color="#fffaf4"
+        castShadow
+        shadow-mapSize-width={1024}
+        shadow-mapSize-height={1024}
+        shadow-bias={-0.0004}
+        shadow-camera-near={1}
+        shadow-camera-far={30}
+        shadow-camera-left={-4.5}
+        shadow-camera-right={4.5}
+        shadow-camera-top={4.5}
+        shadow-camera-bottom={-4.5}
+      />
+      <directionalLight position={[-5.4, rimY, rimZ]} intensity={rimIntensity} color="#d7f3ff" />
+      {slotRevealT > 0.005 && (
+        <>
+          <pointLight
+            position={[0, -0.52, 0.55]}
+            intensity={0.9 * slotRevealT}
+            distance={5.8}
+            color={COLORS.magentaBright}
+          />
+          <pointLight
+            position={[0, -0.68, -0.45]}
+            intensity={0.65 * slotRevealT}
+            distance={5.0}
+            color={COLORS.cyan}
+          />
+        </>
+      )}
+
+      {/* Shared continuous studio pedestal resting cleanly on FLOOR_Y = -1.35 (morphs seamlessly B3 -> B4) */}
+      <group
+        position={[0, PEDESTAL_CENTER_Y + pedestalEnterY, 0]}
+        scale={[pedestalScaleXZ, 1, pedestalScaleXZ]}
+      >
+        <mesh castShadow receiveShadow>
+          <cylinderGeometry args={[1.98, 2.18, 0.24, 72]} />
+          <meshStandardMaterial
+            color="#44414e"
+            metalness={lerp(0.5, 0.48, pedestalMorphT)}
+            roughness={lerp(0.36, 0.38, pedestalMorphT)}
+            envMapIntensity={1.45}
+          />
+        </mesh>
+        <mesh position={[0, -0.1, 0]} receiveShadow>
+          <cylinderGeometry args={[2.17, 2.22, 0.04, 72]} />
+          <meshStandardMaterial
+            color="#302d38"
+            metalness={0.78}
+            roughness={0.26}
+            envMapIntensity={1.4}
+          />
+        </mesh>
+        <mesh position={[0, 0.122, 0]} receiveShadow>
+          <cylinderGeometry args={[1.9, 1.92, 0.018, 72]} />
+          <meshStandardMaterial color="#54505e" metalness={0.34} roughness={0.44} />
+        </mesh>
+        <mesh position={[0, 0.128, 0]} rotation={[Math.PI / 2, 0, 0]}>
+          <torusGeometry args={[1.948, 0.032, 24, 96]} />
+          <meshStandardMaterial
+            color={COLORS.gold}
+            metalness={0.94}
+            roughness={0.16}
+            envMapIntensity={lerp(1.65, 1.55, pedestalMorphT)}
+          />
+        </mesh>
+        <mesh position={[0, 0.133, 0]} rotation={[Math.PI / 2, 0, 0]}>
+          <torusGeometry args={[1.54, 0.016, 16, 84]} />
+          <meshStandardMaterial
+            color={COLORS.cyan}
+            emissive={COLORS.cyan}
+            emissiveIntensity={pedestalCyanEmissive}
+            roughness={0.18}
+            metalness={0.2}
+          />
+        </mesh>
+        <mesh position={[0, -0.114, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+          <planeGeometry args={[5.9, 4.9]} />
+          <meshBasicMaterial
+            map={stageAssets.shadowTex}
+            transparent
+            depthWrite={false}
+            opacity={0.88}
+          />
+        </mesh>
+        {slotRevealT > 0.01 && (
+          <mesh position={[0, -0.11, 0.12]} rotation={[-Math.PI / 2, 0, 0]}>
+            <planeGeometry args={[5.2, 4.2]} />
+            <meshBasicMaterial
+              map={stageAssets.floorGlowTex}
+              transparent
+              depthWrite={false}
+              blending={THREE.AdditiveBlending}
+              opacity={0.14 * slotRevealT}
+            />
+          </mesh>
+        )}
+      </group>
+
+      {/* B4 Sculpted Dock Slot Cradle emerging directly out of the shared pedestal deck */}
+      {slotRevealT > 0.005 && (
+        <group position={[0, PEDESTAL_DECK_Y + pedestalEnterY, 0]}>
+          <group
+            position={[0, dockRiseY, 0]}
+            scale={[dockScaleXZ, dockScaleY, dockScaleXZ]}
+          >
+            {/* Dock main beveled plinth */}
+            <mesh geometry={stageAssets.dockBaseGeo} castShadow receiveShadow>
+              <meshPhysicalMaterial
+                color="#2b2e3d"
+                metalness={0.58}
+                roughness={0.3}
+                clearcoat={0.62}
+                clearcoatRoughness={0.18}
+                envMapIntensity={1.45}
+              />
+            </mesh>
+
+            {/* Front & back beveled dock slot cheeks */}
+            <mesh
+              geometry={stageAssets.cheekGeo}
+              position={[0, 0.16, 0.32]}
+              castShadow
+              receiveShadow
+            >
+              <meshPhysicalMaterial
+                color="#e5e2ec"
+                metalness={0.14}
+                roughness={0.22}
+                clearcoat={0.78}
+                clearcoatRoughness={0.12}
+                envMapIntensity={1.3}
+              />
+            </mesh>
+            <mesh
+              geometry={stageAssets.cheekGeo}
+              position={[0, 0.16, -0.32]}
+              castShadow
+              receiveShadow
+            >
+              <meshPhysicalMaterial
+                color="#e5e2ec"
+                metalness={0.14}
+                roughness={0.22}
+                clearcoat={0.78}
+                clearcoatRoughness={0.12}
+                envMapIntensity={1.3}
+              />
+            </mesh>
+
+            {/* Luminous top bevel cyan guide rails */}
+            <mesh position={[0, 0.585, 0.32]}>
+              <boxGeometry args={[1.08, 0.022, 0.036]} />
+              <meshStandardMaterial
+                color={COLORS.cyanSoft}
+                emissive={COLORS.cyan}
+                emissiveIntensity={0.85 * slotRevealT}
+                roughness={0.15}
+              />
+            </mesh>
+            <mesh position={[0, 0.585, -0.32]}>
+              <boxGeometry args={[1.08, 0.022, 0.036]} />
+              <meshStandardMaterial
+                color={COLORS.cyanSoft}
+                emissive={COLORS.cyan}
+                emissiveIntensity={0.85 * slotRevealT}
+                roughness={0.15}
+              />
+            </mesh>
+
+            {/* Recessed glowing magenta optical slot core bed */}
+            <mesh position={[0, 0.195, 0]}>
+              <boxGeometry args={[1.18, 0.036, 0.42]} />
+              <meshStandardMaterial
+                color="#ff74c6"
+                emissive={COLORS.magentaBright}
+                emissiveIntensity={1.0 * slotRevealT}
+                roughness={0.12}
+              />
+            </mesh>
+
+            {/* Frosted optical glass diffuser lens over slot bed */}
+            <mesh position={[0, 0.225, 0]}>
+              <boxGeometry args={[1.22, 0.024, 0.46]} />
+              <meshPhysicalMaterial
+                color="#f0f9ff"
+                transparent
+                opacity={0.34 * slotRevealT}
+                roughness={0.08}
+                metalness={0.05}
+                clearcoat={1.0}
+                ior={1.48}
+              />
+            </mesh>
+
+            {/* Sliding brushed-aluminum lock clamps */}
+            <mesh
+              geometry={stageAssets.clampGeo}
+              position={[-clampX, 0.16, 0]}
+              castShadow
+              receiveShadow
+            >
+              <meshStandardMaterial
+                color="#d5d9e3"
+                metalness={0.9}
+                roughness={0.18}
+                envMapIntensity={1.6}
+              />
+            </mesh>
+            <mesh
+              geometry={stageAssets.clampGeo}
+              position={[clampX, 0.16, 0]}
+              castShadow
+              receiveShadow
+            >
+              <meshStandardMaterial
+                color="#d5d9e3"
+                metalness={0.9}
+                roughness={0.18}
+                envMapIntensity={1.6}
+              />
+            </mesh>
+          </group>
+
+          {/* Dynamic hover shadow projected onto pedestal deck */}
+          <mesh
+            position={[0, 0.015, 0]}
+            rotation={[-Math.PI / 2, 0, 0]}
+            scale={tokenShadowScale}
+          >
+            <planeGeometry args={[2.55, 2.05]} />
+            <meshBasicMaterial
+              map={stageAssets.padShadowTex}
+              transparent
+              depthWrite={false}
+              opacity={tokenShadowOpacity}
+            />
+          </mesh>
+        </group>
+      )}
+
+      {/* Hero AgentToken + extra outer kinetic orbital halo ring */}
+      <group position={tokenPos}>
+        <AgentToken
+          frame={heroTokenFrame}
+          scale={heroScale}
+          spin={heroSpin}
+          ringGlow={heroRingGlow}
+        />
+
+        {showOuterHalo && (
+          <group
+            rotation={[outerRingRotX, outerRingRotY, outerRingRotZ]}
+            scale={haloScale}
+          >
+            <mesh castShadow>
+              <torusGeometry args={[1.56, 0.022, 20, 96]} />
+              <meshPhysicalMaterial
+                color={COLORS.cyanSoft}
+                emissive={COLORS.cyan}
+                emissiveIntensity={0.42 * haloExit}
+                metalness={0.35}
+                roughness={0.12}
+                clearcoat={1}
+                transparent
+                opacity={haloExit}
+              />
+            </mesh>
+            <mesh position={[Math.cos(satAngle) * 1.56, Math.sin(satAngle) * 1.56, 0]}>
+              <sphereGeometry args={[0.056, 20, 20]} />
+              <meshStandardMaterial
+                color={COLORS.magentaBright}
+                emissive={COLORS.magentaBright}
+                emissiveIntensity={0.9 * haloExit}
+                roughness={0.15}
+                transparent
+                opacity={haloExit}
+              />
+            </mesh>
+          </group>
+        )}
+      </group>
+
+      {/* Depth-parallax faceted gem accents morphing continuously into B4 SlotScene gems */}
+      <group>
+        {B3_GEMS.map((g, idx) => {
+          const b3Y = g.pos[1] + Math.sin(frame * 0.12 + g.phase) * 0.07;
+          const b4Y =
+            g.b4Pos[1] +
+            Math.sin((b4Token.slotFrame / 24) * Math.PI + g.b4Phase) * 0.065;
+          const gx = lerp(g.pos[0], g.b4Pos[0], diveT);
+          const gy = lerp(b3Y, b4Y, diveT);
+          const gz = lerp(g.pos[2], g.b4Pos[2], diveT);
+          const rx = lerp(g.phase + frame * 0.024, g.b4Phase + b4Token.slotFrame * 0.02, diveT);
+          const ry = lerp(
+            g.phase * 1.3 + frame * 0.03,
+            g.b4Phase * 1.35 + b4Token.slotFrame * 0.026,
+            diveT
+          );
+          const rz = lerp(0.2, 0.22, diveT);
+          const gScale = lerp(g.scale, g.b4Scale, diveT);
+
+          return (
+            <mesh
+              key={idx}
+              position={[gx, gy, gz]}
+              rotation={[rx, ry, rz]}
+              scale={gScale}
+            >
+              <octahedronGeometry args={[1, 0]} />
+              <meshPhysicalMaterial
+                color={g.color}
+                metalness={lerp(g.metalness, g.b4Metalness, diveT)}
+                roughness={lerp(0.14, g.b4Roughness, diveT)}
+                clearcoat={lerp(0.9, 0.88, diveT)}
+                clearcoatRoughness={0.1}
+                envMapIntensity={lerp(1, 1.6, diveT)}
+              />
+            </mesh>
+          );
+        })}
+      </group>
+    </group>
+  );
+};
+
+const Beat3Hero3D: React.FC<{ beatOffset: number }> = ({ beatOffset }) => {
+  const seqFrame = useCurrentFrame();
+  const b3f = seqFrame - beatOffset; // canonical beatFrame: 0 === global f90, 60 === global f150
+  const { width, height } = useVideoConfig();
+
+  const labelEnterT = interpolate(b3f, [4, 18], [0, 1], {
+    easing: EASE_SNAP,
+    ...CLAMP,
+  });
+  const labelExitT = interpolate(b3f, [45, 52], [0, 1], {
+    easing: EASE_IN,
+    ...CLAMP,
+  });
+  const labelY =
+    interpolate(labelEnterT, [0, 1], [22, 0], { easing: EASE_SNAP, ...CLAMP }) -
+    labelExitT * 36;
+  const labelDrift = interpolate(b3f, [0, 52], [6, -6], {
+    easing: EASE_IN_OUT,
+    ...CLAMP,
+  });
+  const ruleW = interpolate(b3f, [10, 34], [0, 168], {
+    easing: EASE_OUT,
+    ...CLAMP,
+  });
+
+  // Subtle motion blur whisper at peak camera/token sweep (0px by f147 so B3->B4 handoff is razor sharp)
+  const diveBlurPx = interpolate(b3f, [47, 52, 57], [0, 1.8, 0], {
+    easing: EASE_IN_OUT,
+    ...CLAMP,
+  });
+
+  // Imperceptible crossfade over f148..153 while pedestal, slot, camera, token & lights are 100% locked to B4
+  const layerOpacity = interpolate(b3f, [58, 63], [1, 0], {
+    easing: EASE_IN_OUT,
+    ...CLAMP,
+  });
+
+  return (
+    <AbsoluteFill
+      style={{
+        backgroundColor: COLORS.studioLight,
+        overflow: "hidden",
+        opacity: layerOpacity,
+        zIndex: 14,
+      }}
+    >
+      {/* Single ThreeCanvas for B3 Hero 3D */}
+      <AbsoluteFill
+        style={{
+          filter: diveBlurPx > 0.05 ? `blur(${diveBlurPx.toFixed(2)}px)` : "none",
+        }}
+      >
+        <ThreeCanvas
+          width={width}
+          height={height}
+          shadows
+          dpr={1}
+          camera={{ fov: 34, near: 0.1, far: 100 }}
+          gl={CANVAS_GL}
+          style={{ width: "100%", height: "100%" }}
+        >
+          <HeroStage3D frame={b3f} />
+        </ThreeCanvas>
+      </AbsoluteFill>
+
+      {/* Minimal Architectural Label: "AI AGENT COMPETITION" (x120..960, y448..516, clear of y424 badge) */}
+      <div
+        style={{
+          position: "absolute",
+          left: SAFE.left,
+          top: 448,
+          width: SAFE.width,
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          transform: `translateY(${(labelY + labelDrift).toFixed(2)}px)`,
+          opacity: labelEnterT * (1 - labelExitT),
+          filter: labelExitT > 0.05 ? `blur(${(labelExitT * 5).toFixed(2)}px)` : "none",
+        }}
+      >
+        <div
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 14,
+            padding: "10px 26px",
+            borderRadius: 999,
+            backgroundColor: "rgba(250, 247, 243, 0.82)",
+            border: "1.5px solid rgba(196, 28, 131, 0.24)",
+            boxShadow: "0 10px 28px rgba(25, 20, 25, 0.06)",
+          }}
+        >
+          <span
+            style={{
+              width: 11,
+              height: 11,
+              borderRadius: "50%",
+              backgroundColor: COLORS.magenta,
+              boxShadow: "0 0 14px rgba(196, 28, 131, 0.65)",
+            }}
+          />
+          <span
+            style={{
+              fontFamily: FONT_DISPLAY,
+              fontSize: 32,
+              fontWeight: 800,
+              letterSpacing: "0.14em",
+              lineHeight: 1,
+              color: COLORS.ink,
+            }}
+          >
+            {COPY.b3Label}
+          </span>
+        </div>
+        <div
+          style={{
+            marginTop: 14,
+            width: ruleW,
+            height: 4,
+            borderRadius: 2,
+            backgroundColor: COLORS.magenta,
+          }}
+        />
+      </div>
+
+      <FilmGrain opacity={0.028} />
+      <SubtleVignette strength={0.12} />
+    </AbsoluteFill>
+  );
+};
+
+// ============================================================================
+// B4 (f150-209, 60f; lead-in f148-149, tail f210-211) — AKSI 3D (SlotScene Lock)
+// Speed-ramped token plunge into slot -> lock hit + 3-frame micro-shake at f~195
+// -> lock-ring light flash opens dark B5 at f210
+// ============================================================================
+
+const Beat4ActionSlot: React.FC<{ beatOffset: number }> = ({ beatOffset }) => {
+  const seqFrame = useCurrentFrame();
+  const b4f = seqFrame - beatOffset; // canonical beatFrame: 0 === global f150, 45 === global f195
+  const { width, height } = useVideoConfig();
+
+  const lines = useMemo(() => {
+    const words = COPY.b4Headline.split(" ");
+    return [
+      words.slice(0, 2).join(" "), // "You enter"
+      words.slice(2, 4).join(" "), // "your AI"
+      words.slice(4).join(" "), // "agent."
+    ];
+  }, []);
+
+  // Speed-ramped SlotScene frame: slow start -> rapid plunge -> lock hit at global f~195 -> settle
+  const slotFrame = getB4SlotFrame(b4f);
+  const camPose = getB4CameraPose(b4f);
+
+  // Subtle 3-frame micro-shake right on lock impact (b4f = 44..46 === global f194..196)
+  const shake = getMicroShake(b4f, 44, 5.5);
+
+  // Synchronized cyan underline sweeping under "agent." right on the 3D dock lock hit (f192..205)
+  const lockUnderline = interpolate(b4f, [42, 55], [0, 1], {
+    easing: EASE_SNAP,
+    ...CLAMP,
+  });
+  const headDriftY = interpolate(b4f, [0, 56], [10, -8], {
+    easing: EASE_IN_OUT,
+    ...CLAMP,
+  });
+
+  // Subtle speed-blur whisper at fastest token plunge right before magnetic capture (f184..193)
+  const plungeBlurPx = interpolate(b4f, [32, 39, 43], [0, 1.4, 0], {
+    easing: EASE_IN_OUT,
+    ...CLAMP,
+  });
+
+  // Clean headline exit into lock-ring flash (f204..210)
+  const textExitT = interpolate(b4f, [54, 60], [0, 1], {
+    easing: EASE_IN,
+    ...CLAMP,
+  });
+
+  // B4 dissolves behind peak white/cyan flash at f209..211 (b4f = 59..61)
+  const layerOpacity = interpolate(b4f, [59, 61], [1, 0], {
+    easing: EASE_IN_OUT,
+    ...CLAMP,
+  });
+
+  return (
+    <AbsoluteFill
+      style={{
+        backgroundColor: COLORS.studioLight,
+        overflow: "hidden",
+        opacity: layerOpacity,
+        zIndex: 12,
+      }}
+    >
+      <AbsoluteFill
+        style={{
+          transform: shake.active
+            ? `translate(${shake.x.toFixed(2)}px, ${shake.y.toFixed(2)}px) scale(1.012)`
+            : "none",
+        }}
+      >
+        {/* Single ThreeCanvas for B4 Action 3D */}
+        <AbsoluteFill
+          style={{
+            filter: plungeBlurPx > 0.05 ? `blur(${plungeBlurPx.toFixed(2)}px)` : "none",
+          }}
+        >
+          <ThreeCanvas
+            width={width}
+            height={height}
+            shadows
+            dpr={1}
+            camera={{ fov: 34, near: 0.1, far: 100 }}
+            gl={CANVAS_GL}
+            style={{ width: "100%", height: "100%" }}
+          >
+            <MixCameraRig position={camPose.position} target={camPose.target} fov={34} />
+            <StudioBg frame={b4f} tone="light" />
+            <SlotScene frame={slotFrame} tone="light" withCamera={false} />
+          </ThreeCanvas>
+        </AbsoluteFill>
+
+        {/* Soft top studio read scrim ensuring razor-crisp dark type legibility */}
+        <div
+          style={{
+            position: "absolute",
+            left: 0,
+            right: 0,
+            top: 0,
+            height: 920,
+            pointerEvents: "none",
+            background:
+              "linear-gradient(180deg, rgba(250,247,243,0.72) 0%, rgba(250,247,243,0.42) 68%, rgba(250,247,243,0) 100%)",
+          }}
+        />
+
+        {/* Giant 142px 3-line Headline: "You enter / your AI / agent." (x120..960, y446..876) */}
+        <div
+          style={{
+            position: "absolute",
+            left: SAFE.left,
+            top: 446,
+            width: SAFE.width,
+            opacity: 1 - textExitT,
+            filter: textExitT > 0.05 ? `blur(${(textExitT * 6).toFixed(2)}px)` : "none",
+            transform: `translateY(${(headDriftY - textExitT * 42).toFixed(2)}px)`,
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "flex-start",
+            gap: 4,
+          }}
+        >
+          {lines.map((lineText, idx) => {
+            const start = 3 + idx * 4;
+            const t = interpolate(b4f, [start, start + 11], [0, 1], {
+              easing: EASE_SNAP,
+              ...CLAMP,
+            });
+            const slideY = interpolate(t, [0, 1], [52, 0], {
+              easing: EASE_SNAP,
+              ...CLAMP,
+            });
+            const isAccent = idx === 2;
+
+            return (
+              <div key={idx} style={{ overflow: "hidden", paddingBottom: isAccent ? 18 : 2 }}>
+                <div
+                  style={{
+                    position: "relative",
+                    display: "inline-block",
+                    fontFamily: FONT_DISPLAY,
+                    fontSize: 142,
+                    fontWeight: 800,
+                    lineHeight: 0.95,
+                    letterSpacing: "-0.042em",
+                    color: isAccent ? COLORS.magenta : COLORS.ink,
+                    opacity: t,
+                    transform: `translateY(${slideY.toFixed(2)}px)`,
+                  }}
+                >
+                  {lineText}
+                  {isAccent && (
+                    <span
+                      style={{
+                        position: "absolute",
+                        left: 0,
+                        bottom: -12,
+                        width: `${lockUnderline * 100}%`,
+                        height: 11,
+                        borderRadius: 6,
+                        backgroundColor: COLORS.cyan,
+                        boxShadow: "0 4px 20px rgba(34, 211, 238, 0.55)",
+                      }}
+                    />
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        <FilmGrain opacity={0.028} />
+        <SubtleVignette strength={0.14} />
+      </AbsoluteFill>
+    </AbsoluteFill>
+  );
+};
+
+// ============================================================================
+// B5 (f210-269, 60f; lead-in f209, tail f270-274) — TUGAS 3D (TaskWorld Dark)
+// Opens from B4 lock flash -> checkmark pop + 3-frame micro-shake at f~255 ->
+// speed-ramped camera push-in through checkmark into B6 CoinField
+// ============================================================================
+
+const Beat5Task3D: React.FC<{ beatOffset: number }> = ({ beatOffset }) => {
+  const seqFrame = useCurrentFrame();
+  const b5f = seqFrame - beatOffset; // canonical beatFrame: 0 === global f210, 45 === global f255
+  const { width, height } = useVideoConfig();
+
+  const lines = useMemo(() => {
+    const words = COPY.b5Headline.split(" ");
+    return [
+      words.slice(0, 2).join(" "), // "It tackles"
+      words[2], // "coding"
+      words[3], // "challenges."
+    ];
+  }, []);
+
+  const taskFrame = getB5TaskFrame(b5f);
+
+  // Subtle opening counter-settle out of B4->B5 white/cyan flash (f210..215)
+  const entryScale = interpolate(b5f, [0, 6], [1.055, 1], {
+    easing: EASE_OUT,
+    ...CLAMP,
+  });
+  const entryBlurPx = interpolate(b5f, [0, 5], [5, 0], {
+    easing: EASE_OUT,
+    ...CLAMP,
+  });
+
+  // Base orbit placing TaskWorld cleanly in upper-mid (y≈316..815)
+  const orbitT = interpolate(b5f, [0, 53], [0, 1], {
+    easing: EASE_IN_OUT,
+    ...CLAMP,
+  });
+  const baseCamPos: [number, number, number] = [
+    -2.1 + orbitT * 4.0,
+    3.55 - orbitT * 0.42 + Math.sin(orbitT * Math.PI) * 0.22,
+    17.4 - orbitT * 1.35,
+  ];
+  const baseTarget: [number, number, number] = [-0.18, -2.33, 0];
+
+  // B5 -> B6 Speed-Ramped Push-In Through 3D Checkmark (b5f = 53..64 === global f263..274)
+  // World center of TaskWorld's emerald checkmark is [0, 0.32, 0.06]
+  const pushThroughT = interpolate(b5f, [53, 64], [0, 1], {
+    easing: EASE_PUSH_THROUGH,
+    ...CLAMP,
+  });
+  const targetLockT = interpolate(b5f, [53, 60], [0, 1], {
+    easing: EASE_IN_OUT,
+    ...CLAMP,
+  });
+  const camPos = lerp3(baseCamPos, [0, 0.48, 1.95], pushThroughT);
+  const camTarget = lerp3(baseTarget, [0, 0.32, 0.06], targetLockT);
+
+  // Coordinated 2D punch-through scale + motion blur + emerald-cyan specular wash
+  const exitZoomScale = 1 + pushThroughT * 1.45;
+  const exitBlurPx = interpolate(b5f, [56, 63], [0, 14], {
+    easing: EASE_IN,
+    ...CLAMP,
+  });
+  const totalBlurPx = Math.max(entryBlurPx, exitBlurPx);
+  const layerOpacity = interpolate(b5f, [59, 64], [1, 0], {
+    easing: EASE_IN_OUT,
+    ...CLAMP,
+  });
+  const punchWashOpacity = interpolate(b5f, [58, 61, 64], [0, 0.42, 0], {
+    easing: EASE_OUT,
+    ...CLAMP,
+  });
+
+  // Subtle 3-frame micro-shake right as 3D emerald checkmark pops (b5f = 44..46 === global f254..256)
+  const shake = getMicroShake(b5f, 44, 5.0);
+
+  // Cyan underline under "coding" (f224..242) + emerald completion pulse synced to checkmark pop (f252..263)
+  const codingRuleT = interpolate(b5f, [14, 32], [0, 1], {
+    easing: EASE_SNAP,
+    ...CLAMP,
+  });
+  const checkGlowT = interpolate(b5f, [42, 48, 56], [0, 1, 0.72], {
+    easing: EASE_OUT,
+    ...CLAMP,
+  });
+  const textDriftY = interpolate(b5f, [0, 53], [8, -8], {
+    easing: EASE_IN_OUT,
+    ...CLAMP,
+  });
+  const textExitT = interpolate(b5f, [53, 59], [0, 1], {
+    easing: EASE_IN,
+    ...CLAMP,
+  });
+
+  const combinedScale = entryScale * exitZoomScale * (shake.active ? 1.012 : 1);
+
+  return (
+    <AbsoluteFill
+      style={{
+        backgroundColor: COLORS.darkBg,
+        overflow: "hidden",
+        opacity: layerOpacity,
+        zIndex: 10,
+      }}
+    >
+      <AbsoluteFill
+        style={{
+          transformOrigin: "50% 44%",
+          transform:
+            shake.active || Math.abs(combinedScale - 1) > 0.0005
+              ? `translate(${shake.x.toFixed(2)}px, ${shake.y.toFixed(2)}px) scale(${combinedScale.toFixed(4)})`
+              : "none",
+          filter: totalBlurPx > 0.05 ? `blur(${totalBlurPx.toFixed(2)}px)` : "none",
+        }}
+      >
+        {/* Single ThreeCanvas for B5 TaskWorld Dark */}
+        <AbsoluteFill>
+          <ThreeCanvas
+            width={width}
+            height={height}
+            shadows
+            dpr={1}
+            camera={{ fov: 34, near: 0.1, far: 100 }}
+            gl={CANVAS_GL}
+            style={{ width: "100%", height: "100%" }}
+          >
+            <MixCameraRig position={camPos} target={camTarget} fov={34} />
+            <StudioBg frame={b5f} tone="dark" />
+            <TaskWorld frame={taskFrame} tone="dark" withCamera={false} />
+          </ThreeCanvas>
+        </AbsoluteFill>
+
+        {/* Dark architectural lower scrim anchoring the giant white/cyan headline */}
+        <div
+          style={{
+            position: "absolute",
+            left: 0,
+            right: 0,
+            top: 750,
+            bottom: 0,
+            opacity: 1 - textExitT,
+            pointerEvents: "none",
+            background:
+              "linear-gradient(180deg, rgba(12,11,20,0) 0%, rgba(12,11,20,0.72) 24%, rgba(12,11,20,0.92) 100%)",
+          }}
+        />
+
+        {/* Giant 140px 3-line Headline: "It tackles / coding / challenges." (x120..960, y832..1238) */}
+        <div
+          style={{
+            position: "absolute",
+            left: SAFE.left,
+            top: 832,
+            width: SAFE.width,
+            opacity: 1 - textExitT,
+            transform: `translateY(${(textDriftY + textExitT * 96).toFixed(2)}px)`,
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "flex-start",
+            gap: 4,
+          }}
+        >
+          {lines.map((lineText, idx) => {
+            const start = 3 + idx * 4;
+            const t = interpolate(b5f, [start, start + 11], [0, 1], {
+              easing: EASE_SNAP,
+              ...CLAMP,
+            });
+            const slideX = interpolate(t, [0, 1], [-46, 0], {
+              easing: EASE_SNAP,
+              ...CLAMP,
+            });
+            const isCyan = idx === 1;
+
+            return (
+              <div key={idx} style={{ overflow: "hidden", paddingBottom: isCyan ? 14 : 2 }}>
+                <div
+                  style={{
+                    position: "relative",
+                    display: "inline-block",
+                    fontFamily: FONT_DISPLAY,
+                    fontSize: 140,
+                    fontWeight: 800,
+                    lineHeight: 0.95,
+                    letterSpacing: "-0.045em",
+                    color: isCyan ? COLORS.cyan : COLORS.white,
+                    textShadow: isCyan
+                      ? `0 0 ${Math.round(24 + checkGlowT * 34)}px rgba(34, 211, 238, ${(0.35 + checkGlowT * 0.35).toFixed(2)})`
+                      : "0 10px 32px rgba(0, 0, 0, 0.55)",
+                    opacity: t,
+                    transform: `translateX(${slideX.toFixed(2)}px)`,
+                  }}
+                >
+                  {lineText}
+                  {isCyan && (
+                    <span
+                      style={{
+                        position: "absolute",
+                        left: 0,
+                        bottom: -8,
+                        width: `${codingRuleT * 100}%`,
+                        height: 9,
+                        borderRadius: 5,
+                        backgroundColor: checkGlowT > 0.2 ? COLORS.emerald : COLORS.cyan,
+                      }}
+                    />
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Soft emerald-cyan light wash as camera passes right through checkmark into B6 */}
+        {punchWashOpacity > 0.01 && (
+          <AbsoluteFill
+            style={{
+              pointerEvents: "none",
+              opacity: punchWashOpacity,
+              background:
+                "radial-gradient(circle at 50% 44%, rgba(103,232,249,0.9) 0%, rgba(16,217,152,0.52) 44%, rgba(44,6,33,0) 80%)",
+            }}
+          />
+        )}
+
+        <FilmGrain dark opacity={0.042} />
+        <SubtleVignette strength={0.26} />
+      </AbsoluteFill>
+    </AbsoluteFill>
+  );
+};
+
+// ============================================================================
+// B6 (f270-329, 60f; lead-in f268-269, tail f330-333) — TYPE+KOIN (CoinField)
+// Receives B5 push-in momentum -> coins drop out bottom of frame while soft
+// feathered white wipe sweeps down to uncover sharp & still B7
+// ============================================================================
+
+const Beat6TypeCoins: React.FC<{ beatOffset: number }> = ({ beatOffset }) => {
+  const seqFrame = useCurrentFrame();
+  const b6f = seqFrame - beatOffset; // canonical beatFrame: 0 === global f270, 60 === global f330
+  const { width, height } = useVideoConfig();
+
+  const lines = useMemo(() => {
+    const words = COPY.b6Headline.split(" ");
+    return [
+      words.slice(0, 2).join(" "), // "Top entries"
+      words.slice(2, 4).join(" "), // "can earn"
+      words[4], // "USDC."
+    ];
+  }, []);
+
+  // Decelerating push-in inertia landing from B5 checkmark punch-through (f268..277)
+  const entryScale = interpolate(b6f, [-2, 7], [0.9, 1], {
+    easing: EASE_OUT,
+    ...CLAMP,
+  });
+  const entryBlurPx = interpolate(b6f, [-1, 5], [7, 0], {
+    easing: EASE_OUT,
+    ...CLAMP,
+  });
+  const entryCamZOffset = interpolate(b6f, [-2, 8], [2.4, 0], {
+    easing: EASE_OUT,
+    ...CLAMP,
+  });
+
+  // CoinField starts already blooming & sweeps across a wide dynamic orbit
+  const coinFrame = interpolate(b6f, [-2, 63], [8, 90], {
+    easing: EASE_FLOW,
+    ...CLAMP,
+  });
+
+  // Dramatic orbiting push-in so pedestal sits below text while gold coins orbit around & beneath
+  const orbitT = interpolate(b6f, [0, 59], [0, 1], {
+    easing: EASE_IN_OUT,
+    ...CLAMP,
+  });
+  const camX = -2.2 + orbitT * 4.4;
+  const camY = 4.05 - orbitT * 0.52 + Math.sin(orbitT * Math.PI) * 0.24;
+  const camZ = 14.8 - orbitT * 2.1 + entryCamZOffset;
+
+  const bloomX = interpolate(b6f, [0, 59], [-120, 140], {
+    easing: EASE_IN_OUT,
+    ...CLAMP,
+  });
+  const typeScale = interpolate(b6f, [0, 56], [0.985, 1.02], {
+    easing: EASE_OUT,
+    ...CLAMP,
+  });
+  const usdcUnderline = interpolate(b6f, [18, 40], [0, 1], {
+    easing: EASE_SNAP,
+    ...CLAMP,
+  });
+
+  // B6 -> B7 Transition: 3D coins drop out bottom of frame (f322..333) + soft white wipe (f324..333)
+  const coinDropT = interpolate(b6f, [52, 63], [0, 1], {
+    easing: EASE_IN,
+    ...CLAMP,
+  });
+  const coinDropY = -coinDropT * 7.4;
+  const coinDropTilt = coinDropT * 0.24;
+  const coinDropBlurPx = interpolate(b6f, [54, 62], [0, 6.5], {
+    easing: EASE_IN,
+    ...CLAMP,
+  });
+
+  const textDropT = interpolate(b6f, [52, 59], [0, 1], {
+    easing: EASE_IN,
+    ...CLAMP,
+  });
+
+  // Soft downward wipe sweeping B6 away to reveal diam+tajam B7 underneath (at f330, wipeY≈1460 > make.fun. y1138)
+  const wipeT = interpolate(b6f, [54, 63], [0, 1], {
+    easing: EASE_SOFT_WIPE,
+    ...CLAMP,
+  });
+  const wipeY = wipeT * height;
+  const veilAlpha = interpolate(b6f, [54, 55.5, 61.5, 63], [0, 1, 1, 0], {
+    easing: EASE_OUT,
+    ...CLAMP,
+  });
+
+  return (
+    <AbsoluteFill style={{ pointerEvents: "none", overflow: "hidden", zIndex: 8 }}>
+      {/* Clipped dark-magenta B6 stage revealing stationary sharp B7 above wipeY */}
+      <AbsoluteFill
+        style={{
+          backgroundColor: COLORS.magentaDeep,
+          overflow: "hidden",
+          clipPath: wipeT > 0.001 ? `inset(${wipeY.toFixed(1)}px 0px 0px 0px)` : "none",
+        }}
+      >
+        <AbsoluteFill
+          style={{
+            transform:
+              entryScale < 0.999 ? `scale(${entryScale.toFixed(4)})` : "none",
+            filter: entryBlurPx > 0.05 ? `blur(${entryBlurPx.toFixed(2)}px)` : "none",
+          }}
+        >
+          {/* Rich animated dark-magenta studio backdrop */}
+          <div
+            style={{
+              position: "absolute",
+              inset: 0,
+              background: `linear-gradient(168deg, ${COLORS.magentaPlum} 0%, ${COLORS.magentaDeep} 48%, ${COLORS.magentaObsidian} 100%)`,
+            }}
+          />
+          <div
+            style={{
+              position: "absolute",
+              width: 1120,
+              height: 1120,
+              borderRadius: "50%",
+              left: -20 + bloomX,
+              top: 280,
+              background:
+                "radial-gradient(circle, rgba(196, 28, 131, 0.54) 0%, rgba(196, 28, 131, 0) 64%)",
+              filter: "blur(68px)",
+            }}
+          />
+          <div
+            style={{
+              position: "absolute",
+              width: 820,
+              height: 820,
+              borderRadius: "50%",
+              right: -180 - bloomX * 0.5,
+              bottom: 120,
+              background:
+                "radial-gradient(circle, rgba(248, 198, 72, 0.16) 0%, rgba(248, 198, 72, 0) 64%)",
+              filter: "blur(60px)",
+            }}
+          />
+
+          {/* Single transparent ThreeCanvas for CoinField (gravity drop exit f322..333) */}
+          <AbsoluteFill
+            style={{
+              filter:
+                coinDropBlurPx > 0.05 ? `blur(${coinDropBlurPx.toFixed(2)}px)` : "none",
+            }}
+          >
+            <ThreeCanvas
+              width={width}
+              height={height}
+              shadows
+              dpr={1}
+              camera={{ fov: 34, near: 0.1, far: 100 }}
+              gl={CANVAS_GL}
+              style={{ width: "100%", height: "100%" }}
+            >
+              <MixCameraRig position={[camX, camY, camZ]} target={[0, 1.25, 0]} fov={34} />
+              <group position={[0, coinDropY, 0]} rotation={[coinDropTilt, 0, 0]}>
+                <CoinField frame={coinFrame} tone="dark" withCamera={false} />
+              </group>
+            </ThreeCanvas>
+          </AbsoluteFill>
+
+          {/* Soft dark-magenta contrast halo behind giant headline */}
+          <div
+            style={{
+              position: "absolute",
+              left: 40,
+              top: 410,
+              width: 1000,
+              height: 540,
+              opacity: 1 - textDropT,
+              pointerEvents: "none",
+              background:
+                "radial-gradient(ellipse at center, rgba(36, 5, 28, 0.62) 0%, rgba(36, 5, 28, 0) 72%)",
+            }}
+          />
+
+          {/* Giant 140px Centered 3-Line Headline: "Top entries / can earn / USDC." (x120..960, y462..888) */}
+          <div
+            style={{
+              position: "absolute",
+              left: SAFE.left,
+              top: 462,
+              width: SAFE.width,
+              opacity: 1 - textDropT,
+              filter: textDropT > 0.05 ? `blur(${(textDropT * 6).toFixed(2)}px)` : "none",
+              transform: `translateY(${(textDropT * 135).toFixed(2)}px) scale(${typeScale.toFixed(4)})`,
+              transformOrigin: "50% 45%",
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              textAlign: "center",
+              gap: 4,
+            }}
+          >
+            {lines.map((lineText, idx) => {
+              const start = 3 + idx * 4;
+              const t = interpolate(b6f, [start, start + 11], [0, 1], {
+                easing: EASE_SNAP,
+                ...CLAMP,
+              });
+              const y = interpolate(t, [0, 1], [42, 0], {
+                easing: EASE_SNAP,
+                ...CLAMP,
+              });
+              const isAccent = idx === 2; // "USDC."
+
+              return (
+                <div key={idx} style={{ overflow: "hidden", paddingBottom: isAccent ? 18 : 2 }}>
+                  <div
+                    style={{
+                      position: "relative",
+                      display: "inline-block",
+                      fontFamily: FONT_DISPLAY,
+                      fontSize: 140,
+                      fontWeight: 900,
+                      lineHeight: 0.95,
+                      letterSpacing: "-0.045em",
+                      color: isAccent ? COLORS.cyan : COLORS.white,
+                      textShadow: isAccent
+                        ? "0 0 42px rgba(34, 211, 238, 0.48), 0 12px 32px rgba(18, 3, 15, 0.65)"
+                        : "0 12px 34px rgba(18, 3, 15, 0.65)",
+                      opacity: t,
+                      transform: `translateY(${y.toFixed(2)}px)`,
+                    }}
+                  >
+                    {lineText}
+                    {isAccent && (
+                      <span
+                        style={{
+                          position: "absolute",
+                          left: "50%",
+                          bottom: -10,
+                          width: `${usdcUnderline * 100}%`,
+                          height: 10,
+                          borderRadius: 5,
+                          transform: "translateX(-50%)",
+                          backgroundColor: COLORS.cyan,
+                          boxShadow: "0 0 24px rgba(34, 211, 238, 0.7)",
+                        }}
+                      />
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          <FilmGrain dark opacity={0.045} />
+          <SubtleVignette strength={0.3} />
+        </AbsoluteFill>
+      </AbsoluteFill>
+
+      {/* Velvety feathered white sweep curtain softening the wipe edge to B7 */}
+      {veilAlpha > 0.01 && (
+        <div
+          style={{
+            position: "absolute",
+            left: 0,
+            right: 0,
+            top: wipeY - 180,
+            height: 300,
+            opacity: veilAlpha,
+            pointerEvents: "none",
+            background:
+              "linear-gradient(180deg, rgba(255,255,255,0) 0%, rgba(255,255,255,0.94) 50%, rgba(255,255,255,0.98) 62%, rgba(255,255,255,0) 100%)",
+          }}
+        />
+      )}
+    </AbsoluteFill>
+  );
+};
+
+// ============================================================================
+// B7 (f330-374, 45f; lead-in f324-329, 8f fade tail f375-382) — LOCKUP BERSIH
+// Giant headline "Enter your AI agent on make.fun." 100% sharp & still (diam+tajam)
+// throughout f330-374, followed by soft 8-frame fade into calm B8 plate
+// ============================================================================
+
+const Beat7CleanLockup: React.FC<{ beatOffset: number }> = ({ beatOffset }) => {
+  const seqFrame = useCurrentFrame();
+  const b7f = seqFrame - beatOffset; // canonical beatFrame: 0 === global f330, 44 === global f374
+  const { width, height } = useVideoConfig();
+
+  const lines = useMemo(() => {
+    const words = COPY.b7Headline.split(" ");
+    return [
+      words.slice(0, 2).join(" "), // "Enter your"
+      words.slice(2, 5).join(" "), // "AI agent on"
+      words.slice(5).join(" "), // "make.fun."
+    ];
+  }, []);
+
+  // Small AgentToken above text stays continuously alive (gentle orbit + float + push-in)
+  const tokenSpin = interpolate(b7f, [-6, 52], [-18, 22], {
+    easing: EASE_IN_OUT,
+    ...CLAMP,
+  });
+  const tokenFloatY = Math.sin(b7f * 0.13) * 0.045;
+  const camX = interpolate(b7f, [-6, 52], [-0.45, 0.48], {
+    easing: EASE_IN_OUT,
+    ...CLAMP,
+  });
+  const camZ = interpolate(b7f, [-6, 52], [12.38, 11.62], {
+    easing: EASE_OUT,
+    ...CLAMP,
+  });
+
+  // Crisp magenta underline draw under "make.fun." + gentle traveling sheen
+  const underlineT = interpolate(b7f, [4, 24], [0, 1], {
+    easing: EASE_SNAP,
+    ...CLAMP,
+  });
+  const sheenLeft = interpolate(b7f, [22, 44], [-120, 680], {
+    easing: EASE_OUT,
+    ...CLAMP,
+  });
+
+  // B7 -> TENANG (B8): exact 8-frame soft fade (global f374..382; 1.000 through f374!)
+  const fadeOut = interpolate(b7f, [44, 52], [1, 0], {
+    easing: EASE_IN_OUT,
+    ...CLAMP,
+  });
+
+  return (
+    <AbsoluteFill
+      style={{
+        backgroundColor: COLORS.white,
+        overflow: "hidden",
+        opacity: fadeOut,
+        zIndex: 6,
+      }}
+    >
+      {/* Soft warm spotlight bloom behind small AgentToken */}
+      <div
+        style={{
+          position: "absolute",
+          left: 340,
+          top: 380,
+          width: 400,
+          height: 360,
+          borderRadius: "50%",
+          background:
+            "radial-gradient(circle, rgba(196, 28, 131, 0.08) 0%, rgba(255,255,255,0) 68%)",
+        }}
+      />
+
+      {/* Single transparent ThreeCanvas placing small AgentToken cleanly at y≈439..669 (above text, below y424 badge) */}
+      <AbsoluteFill style={{ pointerEvents: "none" }}>
+        <ThreeCanvas
+          width={width}
+          height={height}
+          dpr={1}
+          camera={{ fov: 34, near: 0.1, far: 100 }}
+          gl={CANVAS_GL}
+          style={{ width: "100%", height: "100%" }}
+        >
+          {/* Camera level with token at y=+1.55 aimed at y=0 => front-on view projecting to screen y≈554 */}
+          <MixCameraRig position={[camX, 1.55, camZ]} target={[0, 0, 0]} fov={34} />
+          <FloatingTokenRig frame={b7f} />
+          <group position={[0, 1.55 + tokenFloatY, 0]}>
+            <AgentToken
+              frame={b7f + 18}
+              scale={0.43}
+              spin={tokenSpin}
+              ringGlow={0.36}
+            />
+          </group>
+        </ThreeCanvas>
+      </AbsoluteFill>
+
+      {/* Giant 140px Clean Lockup — 100% sharp & still ("diam+tajam") from f330..374 (x120..960, y696..1138) */}
+      <div
+        style={{
+          position: "absolute",
+          left: SAFE.left,
+          top: 696,
+          width: SAFE.width,
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          textAlign: "center",
+          gap: 6,
+        }}
+      >
+        {lines.map((lineText, idx) => {
+          const isDomain = idx === 2; // "make.fun." (always lowercase)
+          return (
+            <div
+              key={idx}
+              style={{
+                position: "relative",
+                display: "inline-block",
+                fontFamily: FONT_DISPLAY,
+                fontSize: 140,
+                fontWeight: 800,
+                lineHeight: 0.96,
+                letterSpacing: "-0.045em",
+                color: isDomain ? COLORS.magenta : COLORS.ink,
+                whiteSpace: "nowrap",
+              }}
+            >
+              {lineText}
+              {isDomain && (
+                <div
+                  style={{
+                    position: "relative",
+                    margin: "14px auto 0",
+                    width: `${underlineT * 100}%`,
+                    height: 11,
+                    borderRadius: 6,
+                    backgroundColor: COLORS.magenta,
+                    overflow: "hidden",
+                    boxShadow: "0 6px 22px rgba(196, 28, 131, 0.3)",
+                  }}
+                >
+                  <div
+                    style={{
+                      position: "absolute",
+                      top: 0,
+                      left: sheenLeft,
+                      width: 120,
+                      height: "100%",
+                      background:
+                        "linear-gradient(90deg, transparent, rgba(255,255,255,0.75), transparent)",
+                    }}
+                  />
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </AbsoluteFill>
+  );
+};
+
+// ============================================================================
+// TENANG (f375-449, 75f) — Calm StudioBg Plate (Zero Text, Ready for ffmpeg End Card)
+// ============================================================================
+
+const Beat8CalmPlate: React.FC = () => {
+  const frame = useCurrentFrame();
+  const { width, height } = useVideoConfig();
+
+  const driftT = interpolate(frame, [0, 74], [0, 1], {
+    easing: EASE_IN_OUT,
+    ...CLAMP,
+  });
+  const camX = -0.65 + driftT * 1.3;
+  const camY = 2.3 - driftT * 0.22;
+  const camZ = 12.6 - driftT * 0.7;
+
+  return (
+    <AbsoluteFill
+      style={{
+        backgroundColor: COLORS.studioLight,
+        overflow: "hidden",
+        zIndex: 4,
+      }}
+    >
+      <ThreeCanvas
+        width={width}
+        height={height}
+        shadows
+        dpr={1}
+        camera={{ fov: 34, near: 0.1, far: 100 }}
+        gl={CANVAS_GL}
+        style={{ width: "100%", height: "100%" }}
+      >
+        <MixCameraRig position={[camX, camY, camZ]} target={[0, -0.25, 0]} fov={34} />
+        <StudioBg frame={frame} tone="light" withLights />
+      </ThreeCanvas>
+    </AbsoluteFill>
+  );
+};
+
+// ============================================================================
+// Root Composition: AdMix (1080x1920, 30fps, 450 frames)
+// Overlapping transitions (6-12f) at exact canonical beat boundaries,
+// monotonic descending z-index (outgoing above incoming -> zero black frames)
+// ============================================================================
+
+export const AdMix: React.FC = () => {
+  return (
+    <AbsoluteFill style={{ backgroundColor: COLORS.studioLight }}>
+      {/* B8 TENANG: f375..449 (75f), mounted underneath B7 for 8f soft dissolve */}
+      <Sequence from={375} durationInFrames={75} name="B8-CalmEndPlate">
+        <Beat8CalmPlate />
+      </Sequence>
+
+      {/* B7 Clean Lockup: canonical f330..374 (lead-in f324..329, 8f fade f375..382) */}
+      <Sequence from={324} durationInFrames={59} name="B7-CleanLockup">
+        <Beat7CleanLockup beatOffset={6} />
+      </Sequence>
+
+      {/* B6 Type + Coins: canonical f270..329 (lead-in f268..269, drop+wipe tail f330..333) */}
+      <Sequence from={268} durationInFrames={66} name="B6-TypeCoins">
+        <Beat6TypeCoins beatOffset={2} />
+      </Sequence>
+
+      {/* B5 Task 3D: canonical f210..269 (lead-in f209, checkmark push-in tail f270..274) */}
+      <Sequence from={209} durationInFrames={66} name="B5-Task3D">
+        <Beat5Task3D beatOffset={1} />
+      </Sequence>
+
+      {/* B4 Action Slot: canonical f150..209 (lead-in f148..149, flash handoff tail f210..211) */}
+      <Sequence from={148} durationInFrames={64} name="B4-ActionSlot">
+        <Beat4ActionSlot beatOffset={2} />
+      </Sequence>
+
+      {/* B3 Hero 3D: canonical f90..149 (lead-in f88..89, orbital dive tail f150..154) */}
+      <Sequence from={88} durationInFrames={67} name="B3-Hero3D">
+        <Beat3Hero3D beatOffset={2} />
+      </Sequence>
+
+      {/* B2 Word-Build: canonical f45..89 (lead-in f42..44, match-cut dissolve tail f90..93) */}
+      <Sequence from={42} durationInFrames={52} name="B2-WordBuild">
+        <Beat2WordBuild beatOffset={3} />
+      </Sequence>
+
+      {/* B1 Kinetic Type: canonical f0..44 (zoom-through tail f45..49) */}
+      <Sequence from={0} durationInFrames={50} name="B1-KineticType">
+        <Beat1KineticType />
+      </Sequence>
+
+      {/* B4 -> B5 Lock-Ring White/Cyan Light Flash Overlay (f206..215, peak at f210) */}
+      <Sequence from={206} durationInFrames={10} name="FX-B4toB5-LockFlash">
+        <TransitionLockFlash />
+      </Sequence>
+    </AbsoluteFill>
+  );
+};
+
+export default AdMix;

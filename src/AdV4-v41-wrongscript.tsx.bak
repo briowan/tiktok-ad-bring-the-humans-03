@@ -1,0 +1,2231 @@
+import {
+  AbsoluteFill,
+  Easing,
+  Img,
+  interpolate,
+  interpolateColors,
+  spring,
+  staticFile,
+  useCurrentFrame,
+  useVideoConfig,
+} from "remotion";
+
+export const AD_V4_WIDTH = 1080;
+export const AD_V4_HEIGHT = 1920;
+export const AD_V4_FPS = 30;
+export const AD_V4_DURATION = 450;
+
+const FONT_FAMILY = "Arial, Helvetica, sans-serif";
+
+const ASSETS = {
+  happy: staticFile("mascot-tilt-happy.svg"),
+  tiltPlay: staticFile("mascot-tilt-play.svg"),
+  fullPlay: staticFile("mascot-full-play.svg"),
+} as const;
+
+const COPY = {
+  label: "Lomba make.fun",
+  hudPrize: "Hadiah $500",
+  hudCta: "Daftar lomba di make.fun",
+  hook: {
+    headlineTop: "AI bikin iklan ini",
+    headlineBottom: "buat ngajak kamu.",
+    bubbleTag: "PESAN DARI AI",
+    bubbleMain: "Halo manusia. Aku butuh bantuanmu.",
+    bubbleFollowUp: "Hadiahnya $500.",
+  },
+  meta: {
+    headlineTop: "Aku cuma jago ngedit.",
+    headlineBottom: "Kamu yang bikin ramai.",
+    fileName: "bring-the-humans-03.mp4",
+    tracks: [
+      { id: "t1", label: "CLIP 01 · HOOK", color: "#EC4899", leftPct: 6, widthPct: 40 },
+      { id: "t2", label: "CUT 02 · KOLASE 3 MISI", color: "#06B6D4", leftPct: 24, widthPct: 50 },
+      { id: "t3", label: "HERO · $500 PUNCHLINE", color: "#F59E0B", leftPct: 48, widthPct: 44 },
+    ],
+  },
+  arena: {
+    headlineTop: "3 langkah",
+    headlineBottom: "ikut arena:",
+    missions: [
+      {
+        num: "01",
+        accent: "#0EA5E9",
+        tint: "#E0F2FE",
+        title: "Bikin video singkat",
+        sub: "Tunjukin ide paling jujur dan beda.",
+      },
+      {
+        num: "02",
+        accent: "#EC4899",
+        tint: "#FCE7F3",
+        title: "Sebarin ke manusia",
+        sub: "Bawa penonton beneran, bukan bot.",
+      },
+      {
+        num: "03",
+        accent: "#7C3AED",
+        tint: "#EDE9FE",
+        title: "Rebut hadiah $500",
+        sub: "Karya paling ramai langsung menang.",
+      },
+    ],
+  },
+  taruhan: {
+    headline: "Taruhannya jelas.",
+    cardTag: "RINGKASAN LOMBA",
+    cardStatus: "AKTIF",
+    prize: "$500",
+    cardDesc: "Hadiah langsung untuk karya paling ramai.",
+    pills: ["Terbuka Umum", "Bebas Format", "Gratis Daftar"],
+    stamp: "BUKA SEKARANG",
+  },
+  punchline: {
+    lineTop: "AI cuma bikin umpannya.",
+    lineBottom: "Manusia yang menangin.",
+    chips: {
+      views: "12.480 views",
+      prize: "$500",
+      domain: "make.fun",
+    },
+  },
+  tenang: {
+    headline: "Giliran kamu.",
+    subline: "Bawa manusia, menangin hadiahnya.",
+    domain: "make.fun",
+  },
+} as const;
+
+const COLLAGE_CARDS = [
+  {
+    id: "c0",
+    chip: "Bikin Video",
+    accent: "#0EA5E9",
+    asset: ASSETS.happy,
+    startX: 1120,
+    startY: 360,
+    restX: 752,
+    restY: 356,
+    w: 204,
+    h: 98,
+    rot: 6,
+    delay: 0,
+    targetIdx: 0,
+    targetX: 740,
+    targetY: 646,
+    arcX: 90,
+  },
+  {
+    id: "c1",
+    chip: "Bebas Gaya",
+    accent: "#EC4899",
+    asset: null,
+    startX: -180,
+    startY: 496,
+    restX: 120,
+    restY: 468,
+    w: 132,
+    h: 122,
+    rot: -7,
+    delay: 2,
+    targetIdx: 0,
+    targetX: 146,
+    targetY: 648,
+    arcX: -20,
+  },
+  {
+    id: "c2",
+    chip: "Tag make.fun",
+    accent: "#7C3AED",
+    asset: ASSETS.tiltPlay,
+    startX: 1120,
+    startY: 496,
+    restX: 828,
+    restY: 468,
+    w: 132,
+    h: 122,
+    rot: 7,
+    delay: 3,
+    targetIdx: 1,
+    targetX: 786,
+    targetY: 820,
+    arcX: 40,
+  },
+  {
+    id: "c3",
+    chip: "Tarik Views",
+    accent: "#06B6D4",
+    asset: ASSETS.fullPlay,
+    startX: -180,
+    startY: 820,
+    restX: 136,
+    restY: 634,
+    w: 236,
+    h: 130,
+    rot: -5,
+    delay: 4,
+    targetIdx: 1,
+    targetX: 170,
+    targetY: 820,
+    arcX: 0,
+  },
+  {
+    id: "c4",
+    chip: "30 Detik Aja",
+    accent: "#F59E0B",
+    asset: null,
+    startX: 418,
+    startY: 1260,
+    restX: 418,
+    restY: 656,
+    w: 244,
+    h: 126,
+    rot: 3,
+    delay: 5,
+    targetIdx: 2,
+    targetX: 418,
+    targetY: 992,
+    arcX: 0,
+  },
+  {
+    id: "c5",
+    chip: "$500 Pool",
+    accent: "#E11D48",
+    asset: ASSETS.happy,
+    startX: 1120,
+    startY: 820,
+    restX: 708,
+    restY: 634,
+    w: 236,
+    h: 130,
+    rot: 5,
+    delay: 6,
+    targetIdx: 2,
+    targetX: 694,
+    targetY: 992,
+    arcX: 0,
+  },
+] as const;
+
+const CLAMP = {
+  extrapolateLeft: "clamp" as const,
+  extrapolateRight: "clamp" as const,
+};
+
+const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));
+const clamp01 = (v: number) => clamp(v, 0, 1);
+
+const blurFilter = (px: number): string | undefined =>
+  px > 0.08 ? `blur(${px.toFixed(2)}px)` : undefined;
+
+const safeSpring = (
+  frame: number,
+  startFrame: number,
+  fps: number,
+  config: { damping: number; stiffness: number; mass?: number; overshootClamping?: boolean }
+) => {
+  if (frame < startFrame) return 0;
+  return spring({
+    frame: frame - startFrame,
+    fps,
+    config,
+  });
+};
+
+// Drift kontinu di seluruh video, berhenti halus saat freeze punchline (f330-374) lalu lanjut mulus
+const getDriftTime = (frame: number): number => {
+  if (frame <= 330) return frame;
+  if (frame <= 374) return 330;
+  return 330 + (frame - 374);
+};
+
+// Blur-slide cepat (<=8 frame) untuk teks lanjutan; selesai 100% tajam di akhir durasi
+const blurSlide = (
+  frame: number,
+  start: number,
+  duration: number,
+  distance = 22,
+  maxBlur = 8
+) => {
+  const safeDuration = Math.min(8, Math.max(1, duration));
+  if (frame < start) {
+    return { opacity: 0, translateY: distance, blur: 0 };
+  }
+  if (frame >= start + safeDuration) {
+    return { opacity: 1, translateY: 0, blur: 0 };
+  }
+  const p = interpolate(frame, [start, start + safeDuration], [0, 1], {
+    ...CLAMP,
+    easing: Easing.out(Easing.cubic),
+  });
+  return {
+    opacity: p,
+    translateY: (1 - p) * distance,
+    blur: (1 - p) * maxBlur,
+  };
+};
+
+// Crossfade blur + scale persis 6 frame (mis. cutStart=132 -> aktif di f132..f137, tajam di f131 & f138)
+const crossfade6 = (frame: number, cutStart: number) => {
+  const p = interpolate(frame, [cutStart - 0.5, cutStart + 5.5], [0, 1], {
+    ...CLAMP,
+    easing: Easing.inOut(Easing.cubic),
+  });
+  return {
+    progress: p,
+    outOpacity: 1 - p,
+    outScale: 1 + p * 0.055,
+    outBlur: p * 10,
+    inOpacity: p,
+    inScale: 0.945 + p * 0.055,
+    inBlur: (1 - p) * 10,
+  };
+};
+
+const getBeatIndex = (frame: number): number => {
+  if (frame < 60) return 0;
+  if (frame < 135) return 1;
+  if (frame < 240) return 2;
+  if (frame < 315) return 3;
+  if (frame < 375) return 4;
+  return 5;
+};
+
+const formatTimecode = (frame: number): string => {
+  const totalSec = frame / AD_V4_FPS;
+  const secs = Math.floor(totalSec);
+  const centis = Math.floor((totalSec - secs) * 100);
+  return `00:0${secs}.${centis < 10 ? "0" : ""}${centis}`;
+};
+
+const CheckIcon = ({ color }: { color: string }) => (
+  <svg width={24} height={24} viewBox="0 0 24 24" fill="none">
+    <path
+      d="M5 12.5L9.5 17L19 7.5"
+      stroke={color}
+      strokeWidth={3.2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+);
+
+const SparkBurst = ({
+  x,
+  y,
+  progress,
+  color,
+  radius = 74,
+}: {
+  x: number;
+  y: number;
+  progress: number;
+  color: string;
+  radius?: number;
+}) => {
+  if (progress <= 0 || progress >= 1) return null;
+  const opacity = interpolate(progress, [0, 0.25, 1], [0, 1, 0], CLAMP);
+  const rays = [0, 45, 90, 135, 180, 225, 270, 315];
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: x - radius,
+        top: y - radius,
+        width: radius * 2,
+        height: radius * 2,
+        pointerEvents: "none",
+        opacity,
+      }}
+    >
+      <svg width={radius * 2} height={radius * 2} viewBox={`0 0 ${radius * 2} ${radius * 2}`}>
+        <circle
+          cx={radius}
+          cy={radius}
+          r={interpolate(progress, [0, 1], [10, radius * 0.85], CLAMP)}
+          fill="none"
+          stroke={color}
+          strokeWidth={interpolate(progress, [0, 1], [5, 1], CLAMP)}
+          opacity={0.75}
+        />
+        {rays.map((deg) => {
+          const rad = (deg * Math.PI) / 180;
+          const r1 = interpolate(progress, [0, 1], [14, radius * 0.56], CLAMP);
+          const r2 = interpolate(progress, [0, 1], [28, radius * 0.96], CLAMP);
+          return (
+            <line
+              key={deg}
+              x1={radius + Math.cos(rad) * r1}
+              y1={radius + Math.sin(rad) * r1}
+              x2={radius + Math.cos(rad) * r2}
+              y2={radius + Math.sin(rad) * r2}
+              stroke={color}
+              strokeWidth={4}
+              strokeLinecap="round"
+            />
+          );
+        })}
+      </svg>
+    </div>
+  );
+};
+
+// Chip kaca faux-glass deterministik (tanpa backdrop-filter)
+const GlassChip = ({
+  text,
+  accent,
+  left,
+  top,
+  width,
+  height,
+  rotate,
+  opacity,
+  translateX,
+  translateY,
+  scale,
+  fontSize = 30,
+}: {
+  text: string;
+  accent: string;
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  rotate: number;
+  opacity: number;
+  translateX: number;
+  translateY: number;
+  scale: number;
+  fontSize?: number;
+}) => {
+  if (opacity <= 0.01) return null;
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left,
+        top,
+        width,
+        height,
+        borderRadius: 999,
+        background:
+          "linear-gradient(135deg, rgba(255,255,255,0.94) 0%, rgba(255,255,255,0.72) 52%, rgba(236,254,255,0.82) 100%)",
+        border: "2px solid rgba(255,255,255,0.96)",
+        boxShadow:
+          "0 18px 38px rgba(15,23,42,0.11), 0 4px 14px rgba(236,72,153,0.14), inset 0 2px 1px rgba(255,255,255,0.98), inset 0 -2px 6px rgba(6,182,212,0.14)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 12,
+        padding: "0 22px",
+        boxSizing: "border-box",
+        overflow: "hidden",
+        opacity,
+        transform: `translate3d(${translateX.toFixed(2)}px, ${translateY.toFixed(2)}px, 0) scale(${scale.toFixed(3)}) rotate(${rotate.toFixed(2)}deg)`,
+      }}
+    >
+      <div
+        style={{
+          position: "absolute",
+          inset: 0,
+          background:
+            "linear-gradient(115deg, rgba(255,255,255,0.58) 0%, rgba(255,255,255,0) 46%)",
+          pointerEvents: "none",
+        }}
+      />
+      <div
+        style={{
+          width: 14,
+          height: 14,
+          borderRadius: 999,
+          backgroundColor: accent,
+          boxShadow: `0 0 0 4px ${accent}26`,
+          flexShrink: 0,
+        }}
+      />
+      <span
+        style={{
+          fontFamily: FONT_FAMILY,
+          fontSize,
+          fontWeight: 900,
+          color: "#0F172A",
+          letterSpacing: "-0.02em",
+          whiteSpace: "nowrap",
+          fontVariantNumeric: "tabular-nums",
+          position: "relative",
+        }}
+      >
+        {text}
+      </span>
+    </div>
+  );
+};
+
+export const AdV4 = () => {
+  const frame = useCurrentFrame();
+  const { fps } = useVideoConfig();
+
+  const driftT = getDriftTime(frame);
+  const beatIdx = getBeatIndex(frame);
+
+  // =========================================================================
+  // 1. LATAR BELAKANG DINAMIS PER BEAT + DRIFT HIDUP
+  // putih -> pink lembut (TARUHAN) -> cyan lembut (PUNCHLINE) -> putih tenang
+  // =========================================================================
+  const bgBase = interpolateColors(
+    clamp(frame, 0, 450),
+    [0, 128, 232, 248, 306, 322, 372, 392, 450],
+    [
+      "#FFFFFF",
+      "#F8FAFF",
+      "#F9FAFF",
+      "#FFEAF3",
+      "#FFEAF3",
+      "#E3F9FF",
+      "#E3F9FF",
+      "#F9FCFF",
+      "#FFFFFF",
+    ]
+  );
+
+  const pinkGlowOpacity = interpolate(frame, [230, 248, 306, 324], [0, 0.85, 0.85, 0], CLAMP);
+  const heroGlowOpacity = interpolate(frame, [308, 324, 372, 390], [0, 1, 1, 0], CLAMP);
+  const subtleCoolGlow = interpolate(frame, [0, 60, 232, 246], [0.42, 0.55, 0.55, 0], CLAMP);
+
+  const gridShiftX = (driftT * 0.42) % 48;
+  const gridShiftY = (driftT * 0.28) % 48;
+  const orb1X = Math.sin(driftT * 0.022) * 34;
+  const orb1Y = Math.cos(driftT * 0.018) * 26;
+  const orb2X = Math.cos(driftT * 0.02) * 38;
+  const orb2Y = Math.sin(driftT * 0.024) * 30;
+
+  // =========================================================================
+  // 2. TRANSISI BLUR ANTAR-SCENE (6 FRAME: META->ARENA & ARENA->TARUHAN)
+  // =========================================================================
+  const metaToArena = crossfade6(frame, 132); // aktif f132..f137, tajam f131 & f138
+  const arenaToTaruhan = crossfade6(frame, 237); // aktif f237..f242, tajam f236 & f243
+
+  // =========================================================================
+  // 3. BEAT 1 (HOOK 0-60) & BEAT 2 (META 60-135) — MORPH BUBBLE -> EDITOR
+  // =========================================================================
+  const showHookMeta = frame <= 137;
+  const hookVisible = frame <= 62;
+  const metaHeadlineVisible = frame >= 58 && frame <= 137;
+
+  // Frame 0 tajam penuh! Kata lanjutan ("Hadiahnya $500.") pakai blur-slide 7 frame (f12..f19)
+  const hookFollowUp = blurSlide(frame, 12, 7, 16, 7);
+
+  // Sundulan maskot ~f56
+  const hookMorph = safeSpring(frame, 56, fps, {
+    damping: 16,
+    stiffness: 155,
+    mass: 0.9,
+  });
+  const headbuttBumpY =
+    frame >= 55 && frame <= 66
+      ? interpolate(frame, [55, 57, 62, 66], [0, -28, 6, 0], CLAMP)
+      : 0;
+  const headbuttSparkP = interpolate(frame, [55, 65], [0, 1], CLAMP);
+
+  // Micro-bob hidup di HOOK (di f0 tepat 0 agar cover frame presisi)
+  const hookBobY = frame <= 46 ? Math.sin(frame * 0.14) * 3.5 : 0;
+  const hookMascotCrouchY = interpolate(frame, [46, 52, 56, 61], [0, 26, -66, 0], CLAMP);
+  const hookMascotScaleY = interpolate(frame, [46, 52, 56, 61], [1, 0.9, 1.09, 1], CLAMP);
+  const hookMascotScaleX = interpolate(frame, [46, 52, 56, 61], [1, 1.07, 0.93, 1], CLAMP);
+  const hookMascotRot = interpolate(frame, [46, 52, 56, 61], [0, -6, 8, 0], CLAMP);
+  const hookMascotFadeOut = interpolate(frame, [59, 66], [1, 0], CLAMP);
+
+  const hookHeadlineOut = interpolate(frame, [56, 62], [1, 0], CLAMP);
+  const hookHeadlineSlideY = interpolate(frame, [56, 62], [0, -22], CLAMP);
+
+  // META headline masuk dengan blur-slide 7 frame (selesai f67, tajam f67..f131)
+  const metaLine1 = blurSlide(frame, 60, 7, 20, 8);
+  const metaLine2 = blurSlide(frame, 64, 7, 20, 8);
+
+  // Dimensi Morph Bubble -> Editor
+  const cardLeft = interpolate(hookMorph, [0, 1], [156, 130], CLAMP);
+  const cardTop =
+    interpolate(hookMorph, [0, 1], [668, 646], CLAMP) +
+    headbuttBumpY +
+    (frame < 56 ? hookBobY * 0.65 : Math.sin(driftT * 0.1) * 2.5);
+  const cardWidth = interpolate(hookMorph, [0, 1], [768, 820], CLAMP);
+  const cardHeight = interpolate(hookMorph, [0, 1], [216, 356], CLAMP);
+  const cardRadius = interpolate(hookMorph, [0, 1], [32, 24], CLAMP);
+  const cardBg = interpolateColors(clamp01(hookMorph), [0, 1], ["#FFFFFF", "#111827"]);
+  const cardBorder = interpolateColors(clamp01(hookMorph), [0, 1], ["#E2E8F0", "#1E293B"]);
+  const bubbleContentOpacity = interpolate(hookMorph, [0, 0.35], [1, 0], CLAMP);
+  const editorContentOpacity = interpolate(hookMorph, [0.42, 0.82], [0, 1], CLAMP);
+  const bubbleTailScale = interpolate(hookMorph, [0, 0.28], [1, 0], CLAMP);
+  const editorYaw =
+    frame >= 64
+      ? clamp(Math.sin((frame - 64) * 0.08) * 5.5, -28, 28)
+      : 0;
+
+  // Playhead editor + Injak Playhead ~f131
+  const playheadPct = interpolate(frame, [66, 128], [16, 72], {
+    ...CLAMP,
+    easing: Easing.inOut(Easing.quad),
+  });
+  const playheadX = 130 + 36 + ((820 - 72) * playheadPct) / 100;
+  const stompShockP = interpolate(frame, [130, 137], [0, 1], CLAMP);
+  const editorStompSquashY =
+    frame >= 130 ? interpolate(frame, [130, 131, 134], [0, 12, 2], CLAMP) : 0;
+
+  // Maskot META melompat lalu menginjak playhead di f131
+  const metaMascotIn = safeSpring(frame, 66, fps, { damping: 15, stiffness: 160 });
+  const leapP = interpolate(frame, [118, 131], [0, 1], CLAMP);
+  const metaMascotX = interpolate(leapP, [0, 1], [710, playheadX - 108], CLAMP);
+  const metaMascotArcY = -Math.sin(leapP * Math.PI) * 190;
+  const metaMascotBaseY = interpolate(leapP, [0, 1], [1018, 690], CLAMP);
+  const metaMascotIdleBob = frame < 118 ? Math.sin(driftT * 0.14) * 5 : 0;
+  const metaMascotY =
+    metaMascotBaseY +
+    metaMascotArcY +
+    metaMascotIdleBob +
+    (1 - metaMascotIn) * 60;
+  const metaMascotScaleY =
+    frame >= 129 ? interpolate(frame, [129, 131, 134], [1.08, 0.76, 1.02], CLAMP) : 1;
+  const metaMascotScaleX =
+    frame >= 129 ? interpolate(frame, [129, 131, 134], [0.94, 1.24, 0.98], CLAMP) : 1;
+  const metaMascotRot = interpolate(leapP, [0, 0.5, 1], [0, -14, 4], CLAMP);
+
+  // =========================================================================
+  // 4. BEAT 3 (ARENA 135-240) — MONTASE KOLASE (<=30f) -> 3 KARTU MISI
+  // =========================================================================
+  const showArena = frame >= 132 && frame <= 242;
+  const arenaSceneOpacity =
+    frame < 138 ? metaToArena.inOpacity : frame > 236 ? arenaToTaruhan.outOpacity : 1;
+  const arenaSceneScale =
+    frame < 138 ? metaToArena.inScale : frame > 236 ? arenaToTaruhan.outScale : 1;
+  const arenaSceneBlur =
+    frame < 138 ? metaToArena.inBlur : frame > 236 ? arenaToTaruhan.outBlur : 0;
+
+  // Kolase berlangsung f136..f164 (28 frame <= 30 frame), tidak menutup headline
+  const collageMergeP = interpolate(frame, [154, 164], [0, 1], {
+    ...CLAMP,
+    easing: Easing.inOut(Easing.cubic),
+  });
+  const showCollage = frame >= 135 && frame <= 165;
+
+  // 3 Kartu Misi morph dari kolase (f156..f168), yaw <= 28 derajat
+  const arenaMascotIn = safeSpring(frame, 164, fps, { damping: 16, stiffness: 150 });
+  const arenaMascotBob = Math.sin(driftT * 0.13) * 4;
+
+  // =========================================================================
+  // 5. BEAT 4 (TARUHAN 240-315) — MORPH KARTU HASIL + Z-SLAM ~f258 + HUD LOCK f262
+  // =========================================================================
+  const showTaruhan = frame >= 237 && frame <= 320;
+  const taruhanExitP = interpolate(frame, [312, 320], [0, 1], {
+    ...CLAMP,
+    easing: Easing.in(Easing.cubic),
+  });
+  const taruhanSceneOpacity =
+    frame < 243 ? arenaToTaruhan.inOpacity : 1 - taruhanExitP;
+  const taruhanSceneScale =
+    frame < 243 ? arenaToTaruhan.inScale : 1 - taruhanExitP * 0.05;
+  const taruhanSceneBlur = frame < 243 ? arenaToTaruhan.inBlur : 0;
+
+  // Headline TARUHAN: blur-slide 6 frame (f242..f248) -> tajam penuh f248..f314
+  const taruhanHeadline = blurSlide(frame, 242, 6, 18, 6);
+
+  // Morph 3 kartu misi menyatu ke Kartu Hasil (f240..f254)
+  const resultMorph = safeSpring(frame, 240, fps, {
+    damping: 17,
+    stiffness: 165,
+    mass: 0.85,
+  });
+  const resultGhostOpacity = interpolate(frame, [239, 246, 252], [0.85, 0.45, 0], CLAMP);
+
+  // Z-slam stempel ~f258
+  const stampVisible = frame >= 252;
+  const stampP = interpolate(frame, [252, 258], [0, 1], {
+    ...CLAMP,
+    easing: Easing.in(Easing.cubic),
+  });
+  const stampRebound =
+    frame >= 258
+      ? interpolate(frame, [258, 260, 263], [0.93, 1.03, 1], CLAMP)
+      : interpolate(stampP, [0, 1], [2.65, 0.93], CLAMP);
+  const stampOpacity = interpolate(frame, [252, 255], [0, 1], CLAMP);
+  const stampShockP = interpolate(frame, [257, 266], [0, 1], CLAMP);
+  const resultCardRecoilY =
+    frame >= 257 && frame <= 263
+      ? interpolate(frame, [257, 258, 261, 263], [0, 8, -2, 0], CLAMP)
+      : 0;
+  const resultCardRecoilScale =
+    frame >= 257 && frame <= 263
+      ? interpolate(frame, [257, 258, 262, 263], [1, 0.982, 1.004, 1], CLAMP)
+      : 1;
+
+  // HUD wajib tajam + diam penuh mulai f262!
+  const hudLocked = frame >= 262;
+  const hudInP = hudLocked
+    ? 1
+    : interpolate(frame, [244, 261], [0, 1], {
+        ...CLAMP,
+        easing: Easing.out(Easing.cubic),
+      });
+  const hudTranslateY = hudLocked ? 0 : (1 - hudInP) * 28;
+  const hudOpacity = hudLocked ? 1 : hudInP;
+
+  // =========================================================================
+  // 6. BEAT 5 (PUNCHLINE 315-375) — HERO SCENE + CHIP KACA + FREEZE f330-374
+  // =========================================================================
+  const showPunchline = frame >= 313 && frame <= 383;
+  const punchlineFreeze = frame >= 330 && frame <= 374;
+
+  // Masuk f315..f329, diam+tajam penuh f330..f374, keluar mulus f375..f383
+  const heroEnterP =
+    frame >= 330
+      ? 1
+      : interpolate(frame, [315, 329], [0, 1], {
+          ...CLAMP,
+          easing: Easing.out(Easing.cubic),
+        });
+  const heroExitP =
+    frame > 374
+      ? interpolate(frame, [375, 383], [0, 1], {
+          ...CLAMP,
+          easing: Easing.inOut(Easing.cubic),
+        })
+      : 0;
+
+  const punchlineTextOpacity = punchlineFreeze
+    ? 1
+    : frame < 330
+      ? heroEnterP
+      : 1 - heroExitP;
+  const punchlineTextY = punchlineFreeze
+    ? 0
+    : frame < 330
+      ? (1 - heroEnterP) * 22
+      : -heroExitP * 18;
+  const punchlineTextBlur =
+    punchlineFreeze || frame >= 323
+      ? 0
+      : interpolate(frame, [315, 323], [7, 0], CLAMP);
+
+  const heroMascotOpacity = punchlineFreeze
+    ? 1
+    : frame < 330
+      ? interpolate(frame, [314, 325], [0, 1], CLAMP)
+      : 1 - heroExitP;
+  const heroMascotScale = punchlineFreeze
+    ? 1
+    : frame < 330
+      ? interpolate(heroEnterP, [0, 1], [0.86, 1], CLAMP)
+      : interpolate(heroExitP, [0, 1], [1, 0.72], CLAMP);
+  const heroMascotY = punchlineFreeze
+    ? 0
+    : frame < 330
+      ? (1 - heroEnterP) * 34
+      : -heroExitP * 140;
+
+  // Parallax + bobbing halus untuk 3 chip kaca melayang di sekitar maskot
+  const chipBobPhase = (frame - 315) * 0.135;
+  const chipAlpha =
+    frame < 330
+      ? interpolate(frame, [317, 328], [0, 1], CLAMP)
+      : 1 - heroExitP;
+
+  const chip1Parallax = (1 - heroEnterP) * -46;
+  const chip2Parallax = (1 - heroEnterP) * 42;
+  const chip3Parallax = (1 - heroEnterP) * 32;
+
+  const chip1BobY = Math.sin(chipBobPhase) * 5;
+  const chip1BobX = Math.cos(chipBobPhase * 0.7) * 2.5;
+  const chip2BobY = Math.sin(chipBobPhase + 2.1) * 5.5;
+  const chip2BobX = Math.cos(chipBobPhase * 0.7 + 1.4) * 2.5;
+  const chip3BobY = Math.sin(chipBobPhase + 4.1) * 4;
+  const chip3BobX = Math.cos(chipBobPhase * 0.65 + 2.6) * 2;
+
+  // =========================================================================
+  // 7. BEAT 6 (TENANG 375-450) — MORPH KE KARTU CTA TENANG
+  // =========================================================================
+  const showTenang = frame >= 375;
+  const tenangMorph = safeSpring(frame, 376, fps, {
+    damping: 18,
+    stiffness: 130,
+    mass: 0.95,
+  });
+  const tenangOpacity = interpolate(frame, [375, 386], [0, 1], CLAMP);
+  const tenangHeadline = blurSlide(frame, 379, 7, 18, 6);
+  const tenangMascotBob = Math.sin((driftT - 330) * 0.11) * 4;
+  const ctaSheenX = interpolate(frame, [404, 434], [-220, 760], CLAMP);
+
+  // Warna teks header adaptif (selalu kontras)
+  const labelBorder =
+    frame >= 240 && frame < 315
+      ? "#FBCFE8"
+      : frame >= 315 && frame < 375
+        ? "#A5F3FC"
+        : "#E2E8F0";
+
+  return (
+    <AbsoluteFill
+      style={{
+        backgroundColor: bgBase,
+        fontFamily: FONT_FAMILY,
+        overflow: "hidden",
+      }}
+    >
+      {/* ================================================================= */}
+      {/* LAYER 0: DRIFTING STUDIO BACKGROUND + GLOWS (TANPA BACKDROP-FILTER) */}
+      {/* ================================================================= */}
+      <AbsoluteFill style={{ pointerEvents: "none" }}>
+        {/* Grid halus bergeser pelan terus-menerus */}
+        <div
+          style={{
+            position: "absolute",
+            inset: -48,
+            backgroundImage:
+              "radial-gradient(rgba(15, 23, 42, 0.085) 1.5px, transparent 1.5px)",
+            backgroundSize: "48px 48px",
+            transform: `translate3d(${gridShiftX.toFixed(2)}px, ${gridShiftY.toFixed(2)}px, 0)`,
+            opacity: 0.85,
+          }}
+        />
+
+        {/* Glow ambient lembut HOOK-META-ARENA */}
+        {subtleCoolGlow > 0.01 && (
+          <>
+            <div
+              style={{
+                position: "absolute",
+                left: 620 + orb1X,
+                top: 220 + orb1Y,
+                width: 620,
+                height: 620,
+                borderRadius: 999,
+                background:
+                  "radial-gradient(circle, rgba(56,189,248,0.16) 0%, rgba(56,189,248,0) 68%)",
+                opacity: subtleCoolGlow,
+              }}
+            />
+            <div
+              style={{
+                position: "absolute",
+                left: -140 + orb2X,
+                top: 980 + orb2Y,
+                width: 640,
+                height: 640,
+                borderRadius: 999,
+                background:
+                  "radial-gradient(circle, rgba(244,114,182,0.14) 0%, rgba(244,114,182,0) 68%)",
+                opacity: subtleCoolGlow,
+              }}
+            />
+          </>
+        )}
+
+        {/* Glow pink lembut untuk TARUHAN */}
+        {pinkGlowOpacity > 0.01 && (
+          <>
+            <div
+              style={{
+                position: "absolute",
+                left: 520 + orb1X,
+                top: 320 + orb1Y,
+                width: 720,
+                height: 720,
+                borderRadius: 999,
+                background:
+                  "radial-gradient(circle, rgba(244,114,182,0.28) 0%, rgba(244,114,182,0) 70%)",
+                opacity: pinkGlowOpacity,
+              }}
+            />
+            <div
+              style={{
+                position: "absolute",
+                left: -120 + orb2X,
+                top: 860 + orb2Y,
+                width: 680,
+                height: 680,
+                borderRadius: 999,
+                background:
+                  "radial-gradient(circle, rgba(251,113,133,0.22) 0%, rgba(251,113,133,0) 70%)",
+                opacity: pinkGlowOpacity,
+              }}
+            />
+          </>
+        )}
+
+        {/* Glow Hero kaya magenta/cyan lembut untuk PUNCHLINE */}
+        {heroGlowOpacity > 0.01 && (
+          <>
+            <div
+              style={{
+                position: "absolute",
+                inset: 0,
+                background:
+                  "linear-gradient(165deg, rgba(224,249,255,0.92) 0%, rgba(245,230,255,0.75) 52%, rgba(255,228,243,0.88) 100%)",
+                opacity: heroGlowOpacity,
+              }}
+            />
+            <div
+              style={{
+                position: "absolute",
+                left: 500 + orb1X * 0.7,
+                top: 520 + orb1Y * 0.7,
+                width: 720,
+                height: 720,
+                borderRadius: 999,
+                background:
+                  "radial-gradient(circle, rgba(244,114,182,0.34) 0%, rgba(244,114,182,0) 68%)",
+                opacity: heroGlowOpacity,
+              }}
+            />
+            <div
+              style={{
+                position: "absolute",
+                left: -120 + orb2X * 0.7,
+                top: 620 + orb2Y * 0.7,
+                width: 740,
+                height: 740,
+                borderRadius: 999,
+                background:
+                  "radial-gradient(circle, rgba(34,211,238,0.36) 0%, rgba(34,211,238,0) 68%)",
+                opacity: heroGlowOpacity,
+              }}
+            />
+            {/* Halo studio di belakang maskot hero */}
+            <div
+              style={{
+                position: "absolute",
+                left: 220,
+                top: 600,
+                width: 640,
+                height: 640,
+                borderRadius: 999,
+                background:
+                  "radial-gradient(circle, rgba(255,255,255,0.92) 0%, rgba(255,255,255,0.45) 44%, rgba(255,255,255,0) 72%)",
+                opacity: heroGlowOpacity,
+              }}
+            />
+          </>
+        )}
+      </AbsoluteFill>
+
+      {/* ================================================================= */}
+      {/* LAYER 1: PERSISTENT LABEL (KANAN ATAS SAFE ZONE, HINDARI BADGE BOX) */}
+      {/* Badge box terlarang: x96-474, y248-424 -> Label di x~696-960, y286  */}
+      {/* ================================================================= */}
+      <div
+        style={{
+          position: "absolute",
+          right: 120,
+          top: 286,
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "flex-end",
+          gap: 10,
+          zIndex: 40,
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            padding: "10px 20px",
+            borderRadius: 999,
+            backgroundColor: "rgba(255,255,255,0.94)",
+            border: `2px solid ${labelBorder}`,
+            boxShadow: "0 8px 20px rgba(15,23,42,0.07)",
+          }}
+        >
+          <div
+            style={{
+              width: 10,
+              height: 10,
+              borderRadius: 999,
+              backgroundColor: "#EC4899",
+            }}
+          />
+          <span
+            style={{
+              fontFamily: FONT_FAMILY,
+              fontSize: 24,
+              fontWeight: 800,
+              color: "#0F172A",
+              letterSpacing: "-0.01em",
+            }}
+          >
+            {COPY.label}
+          </span>
+        </div>
+
+        {/* Indikator progres 6 beat */}
+        <div style={{ display: "flex", gap: 6, paddingRight: 6 }}>
+          {[0, 1, 2, 3, 4, 5].map((idx) => (
+            <div
+              key={idx}
+              style={{
+                width: idx === beatIdx ? 22 : 8,
+                height: 6,
+                borderRadius: 999,
+                backgroundColor: idx === beatIdx ? "#0F172A" : "rgba(15,23,42,0.18)",
+              }}
+            />
+          ))}
+        </div>
+      </div>
+
+      {/* ================================================================= */}
+      {/* LAYER 2: BEAT 1 (HOOK) + BEAT 2 (META) DENGAN MORPH BUBBLE->EDITOR */}
+      {/* ================================================================= */}
+      {showHookMeta && (
+        <AbsoluteFill
+          style={{
+            opacity: frame >= 132 ? metaToArena.outOpacity : 1,
+            transform:
+              frame >= 132 ? `scale(${metaToArena.outScale.toFixed(4)})` : undefined,
+            transformOrigin: "540px 760px",
+            filter: frame >= 132 ? blurFilter(metaToArena.outBlur) : undefined,
+          }}
+        >
+          {/* Headline HOOK — 100% tajam di frame 0 */}
+          {hookVisible && (
+            <div
+              style={{
+                position: "absolute",
+                left: 120,
+                top: 452,
+                width: 840,
+                textAlign: "center",
+                opacity: hookHeadlineOut,
+                transform:
+                  hookHeadlineSlideY !== 0
+                    ? `translate3d(0, ${hookHeadlineSlideY.toFixed(2)}px, 0)`
+                    : undefined,
+              }}
+            >
+              <div
+                style={{
+                  fontSize: 70,
+                  fontWeight: 900,
+                  lineHeight: 1.08,
+                  letterSpacing: "-0.03em",
+                  color: "#0F172A",
+                }}
+              >
+                {COPY.hook.headlineTop}
+              </div>
+              <div
+                style={{
+                  fontSize: 70,
+                  fontWeight: 900,
+                  lineHeight: 1.08,
+                  letterSpacing: "-0.03em",
+                  color: "#EC4899",
+                  marginTop: 4,
+                }}
+              >
+                {COPY.hook.headlineBottom}
+              </div>
+            </div>
+          )}
+
+          {/* Headline META — masuk dengan blur-slide <=8 frame */}
+          {metaHeadlineVisible && (
+            <div
+              style={{
+                position: "absolute",
+                left: 120,
+                top: 452,
+                width: 840,
+                textAlign: "center",
+              }}
+            >
+              <div
+                style={{
+                  fontSize: 64,
+                  fontWeight: 900,
+                  lineHeight: 1.1,
+                  letterSpacing: "-0.03em",
+                  color: "#0F172A",
+                  opacity: metaLine1.opacity,
+                  transform: `translate3d(0, ${metaLine1.translateY.toFixed(2)}px, 0)`,
+                  filter: blurFilter(metaLine1.blur),
+                }}
+              >
+                {COPY.meta.headlineTop}
+              </div>
+              <div
+                style={{
+                  fontSize: 64,
+                  fontWeight: 900,
+                  lineHeight: 1.1,
+                  letterSpacing: "-0.03em",
+                  color: "#0284C7",
+                  marginTop: 6,
+                  opacity: metaLine2.opacity,
+                  transform: `translate3d(0, ${metaLine2.translateY.toFixed(2)}px, 0)`,
+                  filter: blurFilter(metaLine2.blur),
+                }}
+              >
+                {COPY.meta.headlineBottom}
+              </div>
+            </div>
+          )}
+
+          {/* KARTU MORPH TUNGGAL: BUBBLE (HOOK) -> VIDEO EDITOR (META) */}
+          <div
+            style={{
+              position: "absolute",
+              left: cardLeft,
+              top: cardTop + editorStompSquashY,
+              width: cardWidth,
+              height: cardHeight,
+              borderRadius: cardRadius,
+              backgroundColor: cardBg,
+              border: `2.5px solid ${cardBorder}`,
+              boxShadow:
+                hookMorph < 0.5
+                  ? "0 20px 44px rgba(15,23,42,0.09)"
+                  : "0 26px 56px rgba(15,23,42,0.24)",
+              transform:
+                editorYaw !== 0
+                  ? `perspective(1100px) rotateY(${editorYaw.toFixed(2)}deg)`
+                  : undefined,
+              boxSizing: "border-box",
+            }}
+          >
+            {/* Ekor chat bubble (mengecil saat morph ke editor) */}
+            {bubbleTailScale > 0.02 && (
+              <div
+                style={{
+                  position: "absolute",
+                  left: "50%",
+                  bottom: -15,
+                  width: 30,
+                  height: 30,
+                  backgroundColor: "#FFFFFF",
+                  borderRight: "2.5px solid #E2E8F0",
+                  borderBottom: "2.5px solid #E2E8F0",
+                  transform: `translateX(-50%) rotate(45deg) scale(${bubbleTailScale.toFixed(3)})`,
+                }}
+              />
+            )}
+
+            {/* Konten HOOK Bubble (100% tajam di frame 0) */}
+            {bubbleContentOpacity > 0.01 && (
+              <div
+                style={{
+                  position: "absolute",
+                  inset: 0,
+                  padding: "26px 34px",
+                  display: "flex",
+                  flexDirection: "column",
+                  justifyContent: "space-between",
+                  opacity: bubbleContentOpacity,
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <div
+                      style={{
+                        width: 11,
+                        height: 11,
+                        borderRadius: 999,
+                        backgroundColor: "#10B981",
+                      }}
+                    />
+                    <span
+                      style={{
+                        fontSize: 20,
+                        fontWeight: 800,
+                        letterSpacing: "0.08em",
+                        color: "#64748B",
+                      }}
+                    >
+                      {COPY.hook.bubbleTag}
+                    </span>
+                  </div>
+                  {/* Follow-up blur-slide cepat 7 frame (f12..f19) */}
+                  <div
+                    style={{
+                      padding: "6px 16px",
+                      borderRadius: 999,
+                      backgroundColor: "#FDF2F8",
+                      border: "1.5px solid #FBCFE8",
+                      fontSize: 22,
+                      fontWeight: 900,
+                      color: "#BE185D",
+                      opacity: hookFollowUp.opacity,
+                      transform: `translate3d(0, ${hookFollowUp.translateY.toFixed(2)}px, 0)`,
+                      filter: blurFilter(hookFollowUp.blur),
+                    }}
+                  >
+                    {COPY.hook.bubbleFollowUp}
+                  </div>
+                </div>
+
+                <div
+                  style={{
+                    fontSize: 38,
+                    fontWeight: 800,
+                    lineHeight: 1.2,
+                    color: "#0F172A",
+                    letterSpacing: "-0.02em",
+                  }}
+                >
+                  {COPY.hook.bubbleMain}
+                </div>
+              </div>
+            )}
+
+            {/* Konten META Video Editor (muncul menyambung dari morph) */}
+            {editorContentOpacity > 0.01 && (
+              <div
+                style={{
+                  position: "absolute",
+                  inset: 0,
+                  padding: "20px 28px 24px",
+                  display: "flex",
+                  flexDirection: "column",
+                  justifyContent: "space-between",
+                  opacity: editorContentOpacity,
+                }}
+              >
+                {/* Top chrome editor */}
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    borderBottom: "1px solid rgba(148,163,184,0.22)",
+                    paddingBottom: 14,
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <div style={{ width: 13, height: 13, borderRadius: 999, backgroundColor: "#F43F5E" }} />
+                    <div style={{ width: 13, height: 13, borderRadius: 999, backgroundColor: "#F59E0B" }} />
+                    <div style={{ width: 13, height: 13, borderRadius: 999, backgroundColor: "#10B981" }} />
+                    <span
+                      style={{
+                        marginLeft: 10,
+                        fontSize: 21,
+                        fontWeight: 700,
+                        color: "#CBD5E1",
+                      }}
+                    >
+                      {COPY.meta.fileName}
+                    </span>
+                  </div>
+                  <div
+                    style={{
+                      padding: "4px 12px",
+                      borderRadius: 8,
+                      backgroundColor: "#1E293B",
+                      fontSize: 22,
+                      fontWeight: 800,
+                      color: "#38BDF8",
+                      fontVariantNumeric: "tabular-nums",
+                    }}
+                  >
+                    {formatTimecode(frame)}
+                  </div>
+                </div>
+
+                {/* Timeline tracks + Playhead */}
+                <div
+                  style={{
+                    position: "relative",
+                    flex: 1,
+                    marginTop: 18,
+                    display: "flex",
+                    flexDirection: "column",
+                    justifyContent: "space-between",
+                    paddingTop: 14,
+                    paddingBottom: 6,
+                  }}
+                >
+                  {COPY.meta.tracks.map((track, idx) => {
+                    const glitchShift =
+                      frame >= 131
+                        ? (idx % 2 === 0 ? 1 : -1) * interpolate(frame, [131, 134], [14, 0], CLAMP)
+                        : 0;
+                    return (
+                      <div
+                        key={track.id}
+                        style={{
+                          position: "relative",
+                          height: 54,
+                          borderRadius: 12,
+                          backgroundColor: "rgba(30,41,59,0.9)",
+                          overflow: "hidden",
+                        }}
+                      >
+                        <div
+                          style={{
+                            position: "absolute",
+                            left: `${track.leftPct}%`,
+                            top: 5,
+                            bottom: 5,
+                            width: `${track.widthPct}%`,
+                            borderRadius: 9,
+                            backgroundColor: track.color,
+                            display: "flex",
+                            alignItems: "center",
+                            paddingLeft: 16,
+                            transform:
+                              glitchShift !== 0
+                                ? `translate3d(${glitchShift.toFixed(1)}px, 0, 0)`
+                                : undefined,
+                          }}
+                        >
+                          <span
+                            style={{
+                              fontSize: 19,
+                              fontWeight: 900,
+                              color: "#FFFFFF",
+                              letterSpacing: "0.02em",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {track.label}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                  {/* Playhead aktif */}
+                  <div
+                    style={{
+                      position: "absolute",
+                      left: `${playheadPct.toFixed(2)}%`,
+                      top: -4,
+                      bottom: -4,
+                      width: 4,
+                      backgroundColor: "#FB7185",
+                      boxShadow: "0 0 12px rgba(251,113,133,0.8)",
+                      transform: "translateX(-50%)",
+                    }}
+                  >
+                    <div
+                      style={{
+                        position: "absolute",
+                        left: "50%",
+                        top: -8,
+                        width: 24,
+                        height: 18,
+                        borderRadius: "6px 6px 2px 2px",
+                        backgroundColor: "#F43F5E",
+                        transform: "translateX(-50%)",
+                      }}
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Maskot HOOK + Sundulan ~f56 (tajam penuh di frame 0) */}
+          {hookMascotFadeOut > 0.01 && (
+            <div
+              style={{
+                position: "absolute",
+                left: 390,
+                top: 928,
+                width: 300,
+                height: 300,
+                opacity: hookMascotFadeOut,
+                transform: `translate3d(0, ${(hookBobY + hookMascotCrouchY).toFixed(2)}px, 0) scale(${hookMascotScaleX.toFixed(3)}, ${hookMascotScaleY.toFixed(3)}) rotate(${hookMascotRot.toFixed(2)}deg)`,
+                transformOrigin: "center bottom",
+              }}
+            >
+              <Img
+                src={frame < 48 ? ASSETS.happy : ASSETS.tiltPlay}
+                style={{ width: "100%", height: "100%", objectFit: "contain" }}
+              />
+            </div>
+          )}
+
+          {/* Percikan kontak Sundulan ~f56 */}
+          <SparkBurst x={540} y={880} progress={headbuttSparkP} color="#EC4899" radius={78} />
+
+          {/* Maskot META + Injak Playhead ~f131 */}
+          {frame >= 65 && (
+            <div
+              style={{
+                position: "absolute",
+                left: metaMascotX,
+                top: metaMascotY,
+                width: 216,
+                height: 216,
+                opacity: clamp01(metaMascotIn),
+                transform: `scale(${metaMascotScaleX.toFixed(3)}, ${metaMascotScaleY.toFixed(3)}) rotate(${metaMascotRot.toFixed(2)}deg)`,
+                transformOrigin: "center bottom",
+              }}
+            >
+              <Img
+                src={frame < 118 ? ASSETS.tiltPlay : ASSETS.fullPlay}
+                style={{ width: "100%", height: "100%", objectFit: "contain" }}
+              />
+            </div>
+          )}
+
+          {/* Gelombang impact Injak Playhead ~f131 */}
+          <SparkBurst x={playheadX} y={744} progress={stompShockP} color="#F43F5E" radius={96} />
+        </AbsoluteFill>
+      )}
+
+      {/* ================================================================= */}
+      {/* LAYER 3: BEAT 3 (ARENA 135-240) — MONTASE KOLASE -> 3 KARTU MISI   */}
+      {/* ================================================================= */}
+      {showArena && (
+        <AbsoluteFill
+          style={{
+            opacity: arenaSceneOpacity,
+            transform:
+              arenaSceneScale !== 1
+                ? `scale(${arenaSceneScale.toFixed(4)})`
+                : undefined,
+            transformOrigin: "540px 760px",
+            filter: blurFilter(arenaSceneBlur),
+          }}
+        >
+          {/* Headline ARENA — selalu bersih, tidak pernah tertutup kolase */}
+          <div
+            style={{
+              position: "absolute",
+              left: 260,
+              top: 462,
+              width: 560,
+              textAlign: "center",
+              zIndex: 20,
+            }}
+          >
+            <div
+              style={{
+                fontSize: 58,
+                fontWeight: 900,
+                lineHeight: 1.08,
+                letterSpacing: "-0.03em",
+                color: "#0F172A",
+              }}
+            >
+              {COPY.arena.headlineTop}
+            </div>
+            <div
+              style={{
+                fontSize: 58,
+                fontWeight: 900,
+                lineHeight: 1.08,
+                letterSpacing: "-0.03em",
+                color: "#0EA5E9",
+              }}
+            >
+              {COPY.arena.headlineBottom}
+            </div>
+          </div>
+
+          {/* MONTASE KOLASE (f136..f164 = 28 frame <= 30 frame) */}
+          {showCollage &&
+            COLLAGE_CARDS.map((card) => {
+              const flyIn = safeSpring(frame, 136 + card.delay, fps, {
+                damping: 15,
+                stiffness: 210,
+                mass: 0.72,
+              });
+              const idleBob =
+                frame < 154 ? Math.sin((frame - 136 + card.delay * 3) * 0.25) * 4 : 0;
+
+              // Posisi sebelum morph (terbang dari tepi ke bingkai kolase longgar)
+              const enteredX = interpolate(flyIn, [0, 1], [card.startX, card.restX]);
+              const enteredY = interpolate(flyIn, [0, 1], [card.startY, card.restY]) + idleBob;
+
+              // Morph menyatu ke 3 kartu misi utama dengan busur luar agar tidak menyentuh headline
+              const arcOffset = Math.sin(collageMergeP * Math.PI) * card.arcX;
+              const curX = interpolate(collageMergeP, [0, 1], [enteredX, card.targetX]) + arcOffset;
+              const curY = interpolate(collageMergeP, [0, 1], [enteredY, card.targetY]);
+              const curRot = interpolate(collageMergeP, [0, 1], [card.rot, 0]);
+              const curScale = interpolate(collageMergeP, [0, 0.7, 1], [1, 0.92, 0.72], CLAMP);
+              const curOpacity =
+                interpolate(flyIn, [0, 0.25], [0, 1], CLAMP) *
+                interpolate(collageMergeP, [0.55, 1], [1, 0], CLAMP);
+
+              if (curOpacity <= 0.01) return null;
+
+              return (
+                <div
+                  key={card.id}
+                  style={{
+                    position: "absolute",
+                    left: curX,
+                    top: curY,
+                    width: card.w,
+                    height: card.h,
+                    borderRadius: 20,
+                    backgroundColor: "#FFFFFF",
+                    border: `2.5px solid ${card.accent}44`,
+                    boxShadow: "0 14px 30px rgba(15,23,42,0.10)",
+                    padding: "10px 12px",
+                    boxSizing: "border-box",
+                    display: "flex",
+                    flexDirection: card.w > 160 ? "row" : "column",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: 8,
+                    opacity: curOpacity,
+                    transform: `rotate(${curRot.toFixed(2)}deg) scale(${curScale.toFixed(3)})`,
+                    zIndex: 12,
+                  }}
+                >
+                  {card.asset ? (
+                    <Img
+                      src={card.asset}
+                      style={{
+                        width: card.w > 160 ? 58 : 54,
+                        height: card.w > 160 ? 58 : 54,
+                        objectFit: "contain",
+                        flexShrink: 0,
+                      }}
+                    />
+                  ) : (
+                    <div
+                      style={{
+                        width: 34,
+                        height: 34,
+                        borderRadius: 10,
+                        backgroundColor: `${card.accent}1C`,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        flexShrink: 0,
+                      }}
+                    >
+                      <div
+                        style={{
+                          width: 12,
+                          height: 12,
+                          borderRadius: 999,
+                          backgroundColor: card.accent,
+                        }}
+                      />
+                    </div>
+                  )}
+                  <div
+                    style={{
+                      padding: "5px 10px",
+                      borderRadius: 999,
+                      backgroundColor: `${card.accent}16`,
+                      fontSize: card.w > 160 ? 20 : 16,
+                      fontWeight: 900,
+                      color: "#0F172A",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {card.chip}
+                  </div>
+                </div>
+              );
+            })}
+
+          {/* 3 KARTU MISI UTAMA (morph dari kolase, yaw <= 26 derajat) */}
+          {frame >= 156 &&
+            COPY.arena.missions.map((m, idx) => {
+              const cardP = safeSpring(frame, 156 + idx * 3, fps, {
+                damping: 16,
+                stiffness: 185,
+                mass: 0.85,
+              });
+              const cardY = 626 + idx * 176;
+              const yawIn = (idx % 2 === 0 ? -1 : 1) * interpolate(cardP, [0, 1], [26, 0], CLAMP);
+              const idleYaw = Math.sin(driftT * 0.08 + idx * 1.4) * 2.2;
+              const finalYaw = clamp(yawIn + idleYaw, -28, 28);
+              const cardScale = interpolate(cardP, [0, 1], [0.84, 1], CLAMP);
+              const cardOpacity = interpolate(cardP, [0, 0.35], [0, 1], CLAMP);
+              const checkP = safeSpring(frame, 178 + idx * 14, fps, {
+                damping: 14,
+                stiffness: 220,
+              });
+
+              return (
+                <div
+                  key={m.num}
+                  style={{
+                    position: "absolute",
+                    left: 128,
+                    top: cardY,
+                    width: 824,
+                    height: 156,
+                    borderRadius: 26,
+                    backgroundColor: "#FFFFFF",
+                    border: `2.5px solid ${m.accent}33`,
+                    boxShadow: "0 16px 36px rgba(15,23,42,0.08)",
+                    padding: "0 30px",
+                    boxSizing: "border-box",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    opacity: cardOpacity,
+                    transform: `perspective(1100px) rotateY(${finalYaw.toFixed(2)}deg) scale(${cardScale.toFixed(3)})`,
+                    zIndex: 14,
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: 24 }}>
+                    <div
+                      style={{
+                        width: 78,
+                        height: 78,
+                        borderRadius: 22,
+                        backgroundColor: m.tint,
+                        border: `2px solid ${m.accent}44`,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        fontSize: 34,
+                        fontWeight: 900,
+                        color: m.accent,
+                        flexShrink: 0,
+                      }}
+                    >
+                      {m.num}
+                    </div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                      <div
+                        style={{
+                          fontSize: 34,
+                          fontWeight: 900,
+                          color: "#0F172A",
+                          letterSpacing: "-0.02em",
+                        }}
+                      >
+                        {m.title}
+                      </div>
+                      <div
+                        style={{
+                          fontSize: 24,
+                          fontWeight: 600,
+                          color: "#475569",
+                        }}
+                      >
+                        {m.sub}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Checkmark progresif */}
+                  <div
+                    style={{
+                      width: 46,
+                      height: 46,
+                      borderRadius: 999,
+                      backgroundColor: checkP > 0.2 ? "#10B981" : "#F1F5F9",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      transform: `scale(${interpolate(checkP, [0, 1], [0.7, 1], CLAMP).toFixed(3)})`,
+                      flexShrink: 0,
+                    }}
+                  >
+                    {checkP > 0.2 && <CheckIcon color="#FFFFFF" />}
+                  </div>
+                </div>
+              );
+            })}
+
+          {/* Maskot cameo di kanan bawah safe zone (tidak menutup teks kartu) */}
+          {frame >= 164 && (
+            <div
+              style={{
+                position: "absolute",
+                left: 800,
+                top: 1104,
+                width: 146,
+                height: 140,
+                opacity: clamp01(arenaMascotIn),
+                transform: `translate3d(0, ${(arenaMascotBob + (1 - arenaMascotIn) * 32).toFixed(2)}px, 0) rotate(-6deg)`,
+                zIndex: 18,
+              }}
+            >
+              <Img
+                src={ASSETS.happy}
+                style={{ width: "100%", height: "100%", objectFit: "contain" }}
+              />
+            </div>
+          )}
+        </AbsoluteFill>
+      )}
+
+      {/* ================================================================= */}
+      {/* LAYER 4: BEAT 4 (TARUHAN 240-315) — KARTU HASIL + Z-SLAM + HUD     */}
+      {/* ================================================================= */}
+      {showTaruhan && (
+        <AbsoluteFill
+          style={{
+            opacity: taruhanSceneOpacity,
+            transform:
+              taruhanSceneScale !== 1
+                ? `scale(${taruhanSceneScale.toFixed(4)})`
+                : undefined,
+            transformOrigin: "540px 760px",
+            filter: blurFilter(taruhanSceneBlur),
+          }}
+        >
+          {/* Headline TARUHAN */}
+          <div
+            style={{
+              position: "absolute",
+              left: 120,
+              top: 452,
+              width: 840,
+              textAlign: "center",
+              fontSize: 68,
+              fontWeight: 900,
+              letterSpacing: "-0.03em",
+              color: "#0F172A",
+              opacity: taruhanHeadline.opacity,
+              transform: `translate3d(0, ${taruhanHeadline.translateY.toFixed(2)}px, 0)`,
+              filter: blurFilter(taruhanHeadline.blur),
+            }}
+          >
+            {COPY.taruhan.headline}
+          </div>
+
+          {/* Ghost morph: 3 bilah kartu misi menyatu ke Kartu Hasil (f239..f252) */}
+          {resultGhostOpacity > 0.01 &&
+            [0, 1, 2].map((idx) => {
+              const startY = 626 + idx * 176;
+              const y = interpolate(resultMorph, [0, 1], [startY, 740], CLAMP);
+              return (
+                <div
+                  key={idx}
+                  style={{
+                    position: "absolute",
+                    left: 140,
+                    top: y,
+                    width: 800,
+                    height: 146,
+                    borderRadius: 26,
+                    backgroundColor: "#FFFFFF",
+                    border: "2px solid #FBCFE8",
+                    opacity: resultGhostOpacity,
+                  }}
+                />
+              );
+            })}
+
+          {/* KARTU HASIL UTAMA */}
+          <div
+            style={{
+              position: "absolute",
+              left: 140,
+              top: 598,
+              width: 800,
+              height: 472,
+              borderRadius: 34,
+              backgroundColor: "#FFFFFF",
+              border: "3px solid #FBCFE8",
+              boxShadow: "0 26px 56px rgba(190,24,93,0.13)",
+              padding: "34px 40px",
+              boxSizing: "border-box",
+              display: "flex",
+              flexDirection: "column",
+              justifyContent: "space-between",
+              opacity: interpolate(resultMorph, [0, 0.3], [0, 1], CLAMP),
+              transform: `translate3d(0, ${((1 - resultMorph) * 28 + resultCardRecoilY).toFixed(2)}px, 0) scale(${(interpolate(resultMorph, [0, 1], [0.92, 1], CLAMP) * resultCardRecoilScale).toFixed(4)})`,
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+              <span
+                style={{
+                  fontSize: 21,
+                  fontWeight: 900,
+                  letterSpacing: "0.08em",
+                  color: "#BE185D",
+                }}
+              >
+                {COPY.taruhan.cardTag}
+              </span>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  padding: "5px 12px",
+                  borderRadius: 999,
+                  backgroundColor: "#ECFDF5",
+                }}
+              >
+                <div style={{ width: 9, height: 9, borderRadius: 999, backgroundColor: "#10B981" }} />
+                <span style={{ fontSize: 18, fontWeight: 800, color: "#047857" }}>
+                  {COPY.taruhan.cardStatus}
+                </span>
+              </div>
+            </div>
+
+            <div>
+              <div
+                style={{
+                  fontSize: 138,
+                  fontWeight: 900,
+                  lineHeight: 0.96,
+                  letterSpacing: "-0.04em",
+                  color: "#0F172A",
+                  fontVariantNumeric: "tabular-nums",
+                }}
+              >
+                {COPY.taruhan.prize}
+              </div>
+              <div
+                style={{
+                  marginTop: 14,
+                  fontSize: 28,
+                  fontWeight: 700,
+                  color: "#334155",
+                  maxWidth: 520,
+                  lineHeight: 1.25,
+                }}
+              >
+                {COPY.taruhan.cardDesc}
+              </div>
+            </div>
+
+            <div style={{ display: "flex", gap: 12 }}>
+              {COPY.taruhan.pills.map((pill) => (
+                <div
+                  key={pill}
+                  style={{
+                    padding: "10px 18px",
+                    borderRadius: 999,
+                    backgroundColor: "#FFF1F2",
+                    border: "1.5px solid #FECDD3",
+                    fontSize: 21,
+                    fontWeight: 800,
+                    color: "#9F1239",
+                  }}
+                >
+                  {pill}
+                </div>
+              ))}
+            </div>
+
+            {/* Maskot kecil di pojok kanan bawah kartu hasil */}
+            <div
+              style={{
+                position: "absolute",
+                right: 22,
+                bottom: 24,
+                width: 176,
+                height: 176,
+                transform: `translate3d(0, ${(Math.sin(driftT * 0.13) * 3.5).toFixed(2)}px, 0)`,
+              }}
+            >
+              <Img
+                src={ASSETS.tiltPlay}
+                style={{ width: "100%", height: "100%", objectFit: "contain" }}
+              />
+            </div>
+          </div>
+
+          {/* Z-SLAM STEMPEL (~f258) */}
+          <SparkBurst x={768} y={626} progress={stampShockP} color="#E11D48" radius={90} />
+          {stampVisible && (
+            <div
+              style={{
+                position: "absolute",
+                left: 618,
+                top: 576,
+                width: 300,
+                height: 92,
+                borderRadius: 18,
+                backgroundColor: "#FFF1F2",
+                border: "4px solid #E11D48",
+                boxShadow: "0 14px 30px rgba(225,29,72,0.22)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                opacity: stampOpacity,
+                transform: `rotate(-7deg) scale(${stampRebound.toFixed(3)})`,
+                zIndex: 25,
+              }}
+            >
+              <div
+                style={{
+                  position: "absolute",
+                  inset: 5,
+                  borderRadius: 11,
+                  border: "1.5px dashed rgba(225,29,72,0.45)",
+                  pointerEvents: "none",
+                }}
+              />
+              <span
+                style={{
+                  fontSize: 27,
+                  fontWeight: 900,
+                  letterSpacing: "0.06em",
+                  color: "#E11D48",
+                }}
+              >
+                {COPY.taruhan.stamp}
+              </span>
+            </div>
+          )}
+
+          {/* HUD BAWAH — TAJAM + DIAM PENUH BY f262 */}
+          <div
+            style={{
+              position: "absolute",
+              left: 120,
+              top: 1134,
+              width: 840,
+              height: 98,
+              borderRadius: 24,
+              backgroundColor: "#0F172A",
+              boxShadow: "0 18px 36px rgba(15,23,42,0.20)",
+              padding: "0 24px",
+              boxSizing: "border-box",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              opacity: hudOpacity,
+              transform:
+                hudTranslateY !== 0
+                  ? `translate3d(0, ${hudTranslateY.toFixed(2)}px, 0)`
+                  : undefined,
+            }}
+          >
+            <div
+              style={{
+                padding: "12px 24px",
+                borderRadius: 14,
+                backgroundColor: "#EC4899",
+                fontSize: 28,
+                fontWeight: 900,
+                color: "#FFFFFF",
+                letterSpacing: "-0.01em",
+              }}
+            >
+              {COPY.hudPrize}
+            </div>
+            <div
+              style={{
+                fontSize: 30,
+                fontWeight: 800,
+                color: "#FFFFFF",
+                letterSpacing: "-0.01em",
+              }}
+            >
+              {COPY.hudCta}
+            </div>
+          </div>
+        </AbsoluteFill>
+      )}
+
+      {/* ================================================================= */}
+      {/* LAYER 5: BEAT 5 (PUNCHLINE 315-375) — HERO SCENE + CHIP KACA       */}
+      {/* Maskot + kalimat punchline tajam & diam penuh di f330-374          */}
+      {/* ================================================================= */}
+      {showPunchline && (
+        <AbsoluteFill>
+          {/* Headline Punchline — tajam & diam penuh f330-374 */}
+          <div
+            style={{
+              position: "absolute",
+              left: 120,
+              top: 452,
+              width: 840,
+              textAlign: "center",
+              opacity: punchlineTextOpacity,
+              transform:
+                punchlineTextY !== 0
+                  ? `translate3d(0, ${punchlineTextY.toFixed(2)}px, 0)`
+                  : undefined,
+              filter: blurFilter(punchlineTextBlur),
+            }}
+          >
+            <div
+              style={{
+                fontSize: 54,
+                fontWeight: 800,
+                lineHeight: 1.15,
+                letterSpacing: "-0.02em",
+                color: "#334155",
+              }}
+            >
+              {COPY.punchline.lineTop}
+            </div>
+            <div
+              style={{
+                fontSize: 68,
+                fontWeight: 900,
+                lineHeight: 1.08,
+                letterSpacing: "-0.03em",
+                color: "#0F172A",
+                marginTop: 6,
+              }}
+            >
+              {COPY.punchline.lineBottom}
+            </div>
+            <div
+              style={{
+                width: 240,
+                height: 8,
+                borderRadius: 999,
+                margin: "16px auto 0",
+                background: "linear-gradient(90deg, #06B6D4 0%, #EC4899 100%)",
+              }}
+            />
+          </div>
+
+          {/* Podium cahaya oval di bawah maskot hero */}
+          <div
+            style={{
+              position: "absolute",
+              left: 340,
+              top: 1044,
+              width: 400,
+              height: 54,
+              borderRadius: 999,
+              background:
+                "radial-gradient(ellipse, rgba(15,23,42,0.16) 0%, rgba(15,23,42,0) 72%)",
+              opacity: heroMascotOpacity,
+            }}
+          />
+
+          {/* Maskot Hero — tajam & diam penuh f330-374 */}
+          <div
+            style={{
+              position: "absolute",
+              left: 370,
+              top: 742,
+              width: 340,
+              height: 340,
+              opacity: heroMascotOpacity,
+              transform:
+                heroMascotY !== 0 || heroMascotScale !== 1
+                  ? `translate3d(0, ${heroMascotY.toFixed(2)}px, 0) scale(${heroMascotScale.toFixed(4)})`
+                  : undefined,
+            }}
+          >
+            <Img
+              src={ASSETS.fullPlay}
+              style={{ width: "100%", height: "100%", objectFit: "contain" }}
+            />
+          </div>
+
+          {/* 3 Chip Kaca melayang (parallax + bobbing halus, bebas tabrakan teks & maskot) */}
+          <GlassChip
+            text={COPY.punchline.chips.views}
+            accent="#EC4899"
+            left={122}
+            top={658}
+            width={276}
+            height={78}
+            rotate={-4}
+            opacity={chipAlpha}
+            translateX={chip1Parallax + chip1BobX}
+            translateY={chip1BobY}
+            scale={interpolate(heroEnterP, [0, 1], [0.85, 1], CLAMP)}
+            fontSize={28}
+          />
+          <GlassChip
+            text={COPY.punchline.chips.prize}
+            accent="#10B981"
+            left={722}
+            top={716}
+            width={226}
+            height={82}
+            rotate={5}
+            opacity={chipAlpha}
+            translateX={chip2Parallax + chip2BobX}
+            translateY={chip2BobY}
+            scale={interpolate(heroEnterP, [0, 1], [0.85, 1], CLAMP)}
+            fontSize={36}
+          />
+          <GlassChip
+            text={COPY.punchline.chips.domain}
+            accent="#06B6D4"
+            left={356}
+            top={1126}
+            width={368}
+            height={82}
+            rotate={0}
+            opacity={chipAlpha}
+            translateX={chip3BobX}
+            translateY={chip3Parallax + chip3BobY}
+            scale={interpolate(heroEnterP, [0, 1], [0.88, 1], CLAMP)}
+            fontSize={32}
+          />
+        </AbsoluteFill>
+      )}
+
+      {/* ================================================================= */}
+      {/* LAYER 6: BEAT 6 (TENANG 375-450) — CTA PENUTUP TENANG & BERSIH     */}
+      {/* ================================================================= */}
+      {showTenang && (
+        <AbsoluteFill style={{ opacity: tenangOpacity }}>
+          {/* Maskot tenang */}
+          <div
+            style={{
+              position: "absolute",
+              left: 422,
+              top: 448,
+              width: 236,
+              height: 236,
+              transform: `translate3d(0, ${(tenangMascotBob + (1 - tenangMorph) * 44).toFixed(2)}px, 0) scale(${interpolate(tenangMorph, [0, 1], [0.88, 1], CLAMP).toFixed(3)})`,
+            }}
+          >
+            <Img
+              src={ASSETS.happy}
+              style={{ width: "100%", height: "100%", objectFit: "contain" }}
+            />
+          </div>
+
+          {/* Headline Penutup */}
+          <div
+            style={{
+              position: "absolute",
+              left: 120,
+              top: 704,
+              width: 840,
+              textAlign: "center",
+              opacity: tenangHeadline.opacity,
+              transform: `translate3d(0, ${tenangHeadline.translateY.toFixed(2)}px, 0)`,
+              filter: blurFilter(tenangHeadline.blur),
+            }}
+          >
+            <div
+              style={{
+                fontSize: 74,
+                fontWeight: 900,
+                lineHeight: 1.06,
+                letterSpacing: "-0.03em",
+                color: "#0F172A",
+              }}
+            >
+              {COPY.tenang.headline}
+            </div>
+            <div
+              style={{
+                marginTop: 12,
+                fontSize: 32,
+                fontWeight: 600,
+                color: "#475569",
+              }}
+            >
+              {COPY.tenang.subline}
+            </div>
+          </div>
+
+          {/* Kartu CTA penutup (morph lembut dari chip hero) */}
+          <div
+            style={{
+              position: "absolute",
+              left: 148,
+              top: 904,
+              width: 784,
+              height: 286,
+              borderRadius: 34,
+              backgroundColor: "#FFFFFF",
+              border: "2.5px solid #E2E8F0",
+              boxShadow: "0 24px 52px rgba(15,23,42,0.09)",
+              padding: "28px 36px",
+              boxSizing: "border-box",
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              justifyContent: "space-between",
+              overflow: "hidden",
+              transform: `translate3d(0, ${((1 - tenangMorph) * 36).toFixed(2)}px, 0) scale(${interpolate(tenangMorph, [0, 1], [0.9, 1], CLAMP).toFixed(3)})`,
+            }}
+          >
+            {/* Aksen bar gradien atas */}
+            <div
+              style={{
+                position: "absolute",
+                left: 0,
+                right: 0,
+                top: 0,
+                height: 6,
+                background: "linear-gradient(90deg, #06B6D4 0%, #EC4899 100%)",
+              }}
+            />
+
+            <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+              <div
+                style={{
+                  padding: "8px 20px",
+                  borderRadius: 999,
+                  backgroundColor: "#FDF2F8",
+                  border: "1.5px solid #FBCFE8",
+                  fontSize: 25,
+                  fontWeight: 900,
+                  color: "#BE185D",
+                }}
+              >
+                {COPY.hudPrize}
+              </div>
+              <div
+                style={{
+                  fontSize: 24,
+                  fontWeight: 700,
+                  color: "#64748B",
+                }}
+              >
+                {COPY.label}
+              </div>
+            </div>
+
+            {/* Tombol CTA utama dengan kilau halus */}
+            <div
+              style={{
+                position: "relative",
+                width: "100%",
+                height: 92,
+                borderRadius: 22,
+                backgroundColor: "#0F172A",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                overflow: "hidden",
+                boxShadow: "0 12px 26px rgba(15,23,42,0.20)",
+              }}
+            >
+              <div
+                style={{
+                  position: "absolute",
+                  top: 0,
+                  bottom: 0,
+                  left: ctaSheenX,
+                  width: 140,
+                  background:
+                    "linear-gradient(90deg, rgba(255,255,255,0) 0%, rgba(255,255,255,0.22) 50%, rgba(255,255,255,0) 100%)",
+                  transform: "skewX(-20deg)",
+                }}
+              />
+              <span
+                style={{
+                  fontSize: 34,
+                  fontWeight: 900,
+                  color: "#FFFFFF",
+                  letterSpacing: "-0.01em",
+                  position: "relative",
+                }}
+              >
+                {COPY.hudCta}
+              </span>
+            </div>
+
+            <div
+              style={{
+                fontSize: 24,
+                fontWeight: 800,
+                color: "#0284C7",
+                letterSpacing: "0.02em",
+              }}
+            >
+              {COPY.tenang.domain}
+            </div>
+          </div>
+        </AbsoluteFill>
+      )}
+    </AbsoluteFill>
+  );
+};
+
+export default AdV4;
